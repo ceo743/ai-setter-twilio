@@ -1,0 +1,212 @@
+{
+  "name": "[CLAUDE] AI Setter - Calendly ADV",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "calendly-ai-setter",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "webhook-trigger",
+      "name": "Calendly Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [250, 300],
+      "webhookId": "calendly-ai-setter"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={\"status\": \"ok\"}",
+        "options": {}
+      },
+      "id": "respond-ok",
+      "name": "Respond OK",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [450, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": false,
+            "leftValue": "",
+            "typeValidation": "loose"
+          },
+          "conditions": [
+            {
+              "id": "filter-adv",
+              "leftValue": "={{ $json.payload.event_type.name }}",
+              "rightValue": "TEST TWILLIO",
+              "operator": {
+                "type": "string",
+                "operation": "contains"
+              }
+            }
+          ],
+          "combinator": "or"
+        },
+        "options": {}
+      },
+      "id": "filter-adv",
+      "name": "Solo TEST TWILLIO",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [650, 300]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "nome",
+              "name": "nome",
+              "value": "={{ $json.payload.invitee.first_name }}",
+              "type": "string"
+            },
+            {
+              "id": "cognome",
+              "name": "cognome",
+              "value": "={{ $json.payload.invitee.last_name }}",
+              "type": "string"
+            },
+            {
+              "id": "email",
+              "name": "email",
+              "value": "={{ $json.payload.invitee.email }}",
+              "type": "string"
+            },
+            {
+              "id": "cellulare",
+              "name": "cellulare",
+              "value": "={{ $json.payload.invitee.text_reminder_number || '' }}",
+              "type": "string"
+            },
+            {
+              "id": "data_consulenza",
+              "name": "data_consulenza",
+              "value": "={{ $json.payload.event.start_time }}",
+              "type": "string"
+            },
+            {
+              "id": "ora_consulenza",
+              "name": "ora_consulenza",
+              "value": "={{ $json.payload.event.start_time }}",
+              "type": "string"
+            },
+            {
+              "id": "ruolo",
+              "name": "ruolo",
+              "value": "={{ $json.payload.invitee.questions_and_answers.filter(q => q.question.includes('ruolo'))[0]?.answer || '' }}",
+              "type": "string"
+            },
+            {
+              "id": "acquisizione_clienti",
+              "name": "acquisizione_clienti",
+              "value": "={{ $json.payload.invitee.questions_and_answers.filter(q => q.question.includes('acquisisci'))[0]?.answer || '' }}",
+              "type": "string"
+            },
+            {
+              "id": "obiettivi_linkedin",
+              "name": "obiettivi_linkedin",
+              "value": "={{ $json.payload.invitee.questions_and_answers.filter(q => q.question.includes('ottenere'))[0]?.answer || '' }}",
+              "type": "string"
+            },
+            {
+              "id": "usa_linkedin",
+              "name": "usa_linkedin",
+              "value": "={{ $json.payload.invitee.questions_and_answers.filter(q => q.question.includes('utilizzando'))[0]?.answer || '' }}",
+              "type": "string"
+            },
+            {
+              "id": "fatturato",
+              "name": "fatturato",
+              "value": "={{ $json.payload.invitee.questions_and_answers.filter(q => q.question.includes('fatturato'))[0]?.answer || '' }}",
+              "type": "string"
+            },
+            {
+              "id": "budget",
+              "name": "budget",
+              "value": "={{ $json.payload.invitee.questions_and_answers.filter(q => q.question.includes('budget'))[0]?.answer || '' }}",
+              "type": "string"
+            },
+            {
+              "id": "sito_web",
+              "name": "sito_web",
+              "value": "={{ $json.payload.invitee.questions_and_answers.filter(q => q.question.includes('sito'))[0]?.answer || '' }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "extract-data",
+      "name": "Estrai Dati Form",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [850, 200]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://5b1b2159b072164a-93-37-112-145.serveousercontent.com/calendly-webhook",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json) }}",
+        "options": {
+          "timeout": 10000
+        }
+      },
+      "id": "call-setter",
+      "name": "Chiama AI Setter",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1050, 200]
+    }
+  ],
+  "connections": {
+    "Calendly Webhook": {
+      "main": [
+        [
+          {
+            "node": "Respond OK",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Solo TEST TWILLIO",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Solo TEST TWILLIO": {
+      "main": [
+        [
+          {
+            "node": "Estrai Dati Form",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Estrai Dati Form": {
+      "main": [
+        [
+          {
+            "node": "Chiama AI Setter",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  }
+}
