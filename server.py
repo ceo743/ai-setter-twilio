@@ -2,7 +2,7 @@
 Twilio AI Setter Voice Agent
 -----------------------------
 Flask + flask-sock server that orchestrates:
-  Twilio Media Stream  ->  Deepgram STT  ->  Claude Haiku  ->  ElevenLabs TTS  ->  Twilio
+  Twilio Media Stream  ->  Deepgram STT  ->  Claude Haiku 4.5  ->  ElevenLabs Turbo TTS  ->  Twilio
 
 Everything runs on a single port so a single tunnel (serveo.net) works.
 """
@@ -244,6 +244,25 @@ def calendly_webhook():
                     to_number = qa.get("answer", "")
                     break
 
+        # FILTRO RISPOSTE FORM: blocca lead che nelle risposte dicono di non prenotare
+        BLOCK_PHRASES = [
+            "non prenotare", "non prenotate", "non chiamare", "non chiamate",
+            "guarda il video", "guardare il video", "guardate il video",
+            "non mi interessa", "non sono interessat",
+            "annulla", "cancella", "disdici",
+            "non voglio", "non desidero",
+            "solo il video", "solo video",
+            "non posso investire", "non ancora nata",
+            "trovare lavoro", "fare carriera",
+        ]
+        all_answers = " ".join(qa.get("answer", "") for qa in questions).lower()
+        blocked_phrase = next((p for p in BLOCK_PHRASES if p in all_answers), None)
+        if blocked_phrase:
+            logger.info("BLOCKED LEAD: %s %s - form answer contains '%s'. Full answers: %s",
+                        form_data.get("nome", ""), form_data.get("cognome", ""),
+                        blocked_phrase, all_answers[:300])
+            return {"status": "blocked", "reason": "Lead form answers indicate no call wanted", "phrase": blocked_phrase}
+
         logger.info("Lead: %s %s - Phone: %s", form_data["nome"], form_data["cognome"], to_number)
     else:
         # Simple format (from direct API call or n8n)
@@ -309,13 +328,13 @@ def elevenlabs_tts_stream_sync(text):
     }
     body = {
         "text": text,
-        "model_id": "eleven_multilingual_v2",
+        "model_id": "eleven_turbo_v2_5",
         "voice_settings": {
             "stability": 0.5,
             "similarity_boost": 0.75,
         },
     }
-    with httpx.Client(timeout=30.0) as client:
+    with httpx.Client(timeout=120.0) as client:
         with client.stream("POST", url, headers=headers, json=body) as resp:
             resp.raise_for_status()
             for chunk in resp.iter_bytes(chunk_size=640):
@@ -341,7 +360,7 @@ class ConversationManager:
 
         try:
             response = self.client.messages.create(
-                model="claude-sonnet-4-20250514",
+                model="claude-haiku-4-5-20251001",
                 max_tokens=80,
                 system=self.system_prompt,
                 messages=self.messages,
@@ -406,9 +425,11 @@ def handle_media_stream(ws):
                     if transcript:
                         logger.info("Deepgram final transcript: %s", transcript)
                         transcript_q.put(transcript)
-            except Exception:
+            except Exception as e:
                 if not stop_event.is_set():
-                    logger.exception("Deepgram read error")
+                    logger.exception("Deepgram read error: %s", e)
+                else:
+                    logger.info("Deepgram read ended (stop_event set)")
                 break
 
     dg_thread = threading.Thread(target=read_deepgram, daemon=True)
@@ -450,10 +471,14 @@ def handle_media_stream(ws):
             except queue.Empty:
                 break
         try:
+            chunk_count = 0
             for chunk in elevenlabs_tts_stream_sync(text):
                 if stop_event.is_set():
+                    logger.info("TTS interrupted by stop_event after %d chunks", chunk_count)
                     break
                 send_audio_to_twilio(chunk)
+                chunk_count += 1
+            logger.info("TTS finished: %d chunks sent for: %s", chunk_count, text[:50])
         except Exception:
             logger.exception("TTS streaming error")
         finally:
@@ -488,7 +513,7 @@ def handle_media_stream(ws):
                     buf = text
 
                 # Drain any additional quickly-arriving segments
-                time.sleep(0.5)
+                time.sleep(0.3)
                 while not transcript_q.empty():
                     try:
                         extra = transcript_q.get_nowait()
@@ -525,12 +550,12 @@ def handle_media_stream(ws):
         while True:
             try:
                 raw_message = ws.receive()
-            except Exception:
-                logger.info("WebSocket receive error or connection closed")
+            except Exception as e:
+                logger.info("WebSocket receive error or connection closed: %s", e)
                 break
 
             if raw_message is None:
-                # Connection closed
+                logger.info("WebSocket returned None - connection closed by remote")
                 break
 
             try:
