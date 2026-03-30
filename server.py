@@ -934,8 +934,8 @@ def handle_media_stream(ws):
                     logger.info("Ignoring input while speaking: %s", text)
                     continue
 
-                # Ignore echo in the 1.5s after speaking ends
-                if time.time() - speaking_ended_at[0] < 1.5:
+                # Ignore echo in the 0.8s after speaking ends
+                if time.time() - speaking_ended_at[0] < 0.8:
                     logger.info("Ignoring echo after speaking: %s", text)
                     continue
 
