@@ -33,7 +33,7 @@ from knowledge_base import get_knowledge_prompt
 # Configuration
 # ---------------------------------------------------------------------------
 _env_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env")
-load_dotenv(_env_path, override=True)
+load_dotenv(_env_path, override=False)
 
 TWILIO_ACCOUNT_SID = os.getenv("TWILIO_ACCOUNT_SID")
 TWILIO_AUTH_TOKEN = os.getenv("TWILIO_AUTH_TOKEN")
@@ -48,8 +48,11 @@ PUBLIC_URL = os.getenv("PUBLIC_URL", "")
 # Fix: if PUBLIC_URL is empty or points to dead serveo tunnel, clear it
 # so the server uses request.headers["Host"] which works on Render automatically
 if "serveo" in PUBLIC_URL:
-    logger.warning("PUBLIC_URL points to old serveo tunnel, ignoring it")
+    print("WARNING: PUBLIC_URL points to old serveo tunnel, ignoring it")
     PUBLIC_URL = ""
+if not PUBLIC_URL:
+    PUBLIC_URL = "https://ai-setter-twilio.onrender.com"
+print("  PUBLIC_URL = %s" % PUBLIC_URL)
 
 SERVER_HOST = os.getenv("SERVER_HOST", "0.0.0.0")
 SERVER_PORT = int(os.getenv("PORT", os.getenv("SERVER_PORT", "8080")))
@@ -261,10 +264,12 @@ def calendly_webhook():
     form_data["to"] = to_number
     form_data["cellulare"] = to_number
 
-    # Trigger the call
+    # Trigger the call - pass correct Host header so make_call builds the right TwiML URL
+    ws_host = PUBLIC_URL.replace("https://", "").replace("http://", "").rstrip("/")
     with app.test_request_context(
         "/make-call", method="POST",
-        json=form_data, content_type="application/json"
+        json=form_data, content_type="application/json",
+        headers={"Host": ws_host}
     ):
         return make_call()
 
