@@ -16,6 +16,7 @@ import os
 import queue
 import threading
 import time
+from datetime import datetime, timedelta
 from typing import Optional
 
 import anthropic
@@ -114,6 +115,197 @@ def incoming_call():
 # Store lead data for active calls (call_sid -> lead_data)
 active_leads = {}
 
+# Call history for dashboard and transcripts
+# Each entry: {phone, nome, cognome, ruolo, status, qualified, transcript, timestamp, data_consulenza}
+call_history = []
+
+# Davide's number for notifications
+DAVIDE_PHONE = os.getenv("DAVIDE_PHONE", "+393478644733")
+
+# ---------------------------------------------------------------------------
+# Retry system for no-answer calls
+# ---------------------------------------------------------------------------
+# Intervals in seconds: 5min, 30min, 1h, 2h, 4h
+RETRY_INTERVALS = [300, 1800, 3600, 7200, 14400]
+
+# Track retry state per phone number: {phone: {"attempt": N, "form_data": {}, "answered": False}}
+call_retries = {}
+# Track which call_sids map to which phone number for status callback
+call_sid_to_phone = {}
+
+
+def parse_consultation_time(form_data):
+    """Parse the consultation datetime from form data. Returns datetime or None."""
+    date_str = form_data.get("data_consulenza", "")
+    if not date_str:
+        return None
+    try:
+        # Calendly format: 2026-03-30T15:00:00.000000Z
+        if "T" in date_str:
+            dt = datetime.fromisoformat(date_str.replace("Z", "+00:00"))
+            # Convert to Italian time (UTC+1 or UTC+2 for DST)
+            dt = dt + timedelta(hours=2)  # CET/CEST approximation
+            return dt.replace(tzinfo=None)
+    except Exception:
+        pass
+    return None
+
+
+TWILIO_WHATSAPP_NUMBER = os.getenv("TWILIO_WHATSAPP_NUMBER", "+15559199755")
+
+# WhatsApp Content Template SIDs (approved by Meta)
+WA_TEMPLATE_PRIMO_TENTATIVO = "HX66c6c02faa67d23e446cf69d07394f36"
+WA_TEMPLATE_ULTIMO_TENTATIVO = "HX99ee0607803dae0fbf3b7358734d08cf"
+WA_TEMPLATE_REMINDER = "HX4aac79d57bc31b19c77f44667f876ff1"
+
+# Track opted-out numbers (STOP)
+opted_out_numbers = set()
+
+
+def schedule_reminder(phone_number, form_data):
+    """Schedule a WhatsApp reminder 2 minutes before the consultation."""
+    consultation_dt = parse_consultation_time(form_data)
+    if not consultation_dt:
+        logger.info("REMINDER: No consultation time for %s, skipping", phone_number)
+        return
+
+    reminder_time = consultation_dt - timedelta(minutes=2)
+    delay = (reminder_time - datetime.now()).total_seconds()
+
+    if delay <= 0:
+        logger.info("REMINDER: Consultation already started for %s, skipping", phone_number)
+        return
+
+    first_name = form_data.get("nome", "").strip() or "buongiorno"
+    meeting_link = form_data.get("meeting_link", "")
+
+    if not meeting_link:
+        logger.info("REMINDER: No meeting link for %s, skipping", phone_number)
+        return
+
+    logger.info("REMINDER: Scheduled for %s in %d min (at %s)", phone_number, delay // 60, reminder_time)
+
+    def send_reminder():
+        if phone_number in opted_out_numbers:
+            return
+        variables = {"1": first_name, "2": meeting_link}
+        send_whatsapp_template(phone_number, WA_TEMPLATE_REMINDER, variables)
+        logger.info("REMINDER: Sent to %s", phone_number)
+
+    timer = threading.Timer(delay, send_reminder)
+    timer.daemon = True
+    timer.start()
+
+
+def send_whatsapp_template(phone_number, content_sid, variables):
+    """Send a WhatsApp template message via Twilio Content API."""
+    try:
+        client = TwilioClient(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
+        msg = client.messages.create(
+            to="whatsapp:{}".format(phone_number),
+            from_="whatsapp:{}".format(TWILIO_WHATSAPP_NUMBER),
+            content_sid=content_sid,
+            content_variables=json.dumps(variables),
+        )
+        logger.info("WHATSAPP: Sent template to %s - SID=%s Status=%s", phone_number, msg.sid, msg.status)
+    except Exception:
+        logger.exception("WHATSAPP: Failed to send to %s", phone_number)
+
+
+def schedule_retry(phone_number):
+    """Schedule the next retry call for a lead."""
+    retry_info = call_retries.get(phone_number)
+    if not retry_info:
+        return
+
+    attempt = retry_info["attempt"]
+    form_data = retry_info["form_data"]
+    first_name = form_data.get("nome", "").strip() or "buongiorno"
+    data_consulenza = form_data.get("data_consulenza", "")
+
+    # Format consultation date for WhatsApp message
+    data_display = ""
+    consultation_dt = parse_consultation_time(form_data)
+    if consultation_dt:
+        data_display = consultation_dt.strftime("%d/%m alle %H:%M")
+
+    # After first failed attempt: send WhatsApp template
+    if attempt == 0:
+        variables = {"1": first_name, "2": data_display or "prossimi giorni"}
+        threading.Thread(
+            target=send_whatsapp_template,
+            args=(phone_number, WA_TEMPLATE_PRIMO_TENTATIVO, variables),
+            daemon=True
+        ).start()
+
+    if attempt >= len(RETRY_INTERVALS):
+        # All retries exhausted: send final WhatsApp template
+        variables = {"1": first_name, "2": data_display or "prossimi giorni"}
+        threading.Thread(
+            target=send_whatsapp_template,
+            args=(phone_number, WA_TEMPLATE_ULTIMO_TENTATIVO, variables),
+            daemon=True
+        ).start()
+        logger.info("RETRY: Max attempts reached for %s (%d attempts) - final WhatsApp sent", phone_number, attempt + 1)
+        return
+
+    # Check if we're past the consultation time
+    consultation_dt = parse_consultation_time(retry_info["form_data"])
+    if consultation_dt:
+        delay = RETRY_INTERVALS[attempt]
+        retry_time = datetime.now() + timedelta(seconds=delay)
+        if retry_time >= consultation_dt:
+            logger.info("RETRY: Skipping retry for %s - would be after consultation at %s",
+                        phone_number, consultation_dt)
+            return
+
+    delay = RETRY_INTERVALS[attempt]
+    logger.info("RETRY: Scheduling attempt %d for %s in %d seconds (%d min)",
+                attempt + 2, phone_number, delay, delay // 60)
+
+    def do_retry():
+        if phone_number in opted_out_numbers:
+            logger.info("RETRY: Cancelled for %s - opted out (STOP)", phone_number)
+            return
+        retry_info = call_retries.get(phone_number)
+        if not retry_info or retry_info.get("answered"):
+            logger.info("RETRY: Cancelled for %s - already answered", phone_number)
+            return
+
+        # Check consultation time again at execution time
+        consultation_dt = parse_consultation_time(retry_info["form_data"])
+        if consultation_dt and datetime.now() >= consultation_dt:
+            logger.info("RETRY: Cancelled for %s - past consultation time", phone_number)
+            return
+
+        retry_info["attempt"] += 1
+        form_data = retry_info["form_data"]
+        logger.info("RETRY: Calling %s - attempt %d", phone_number, retry_info["attempt"] + 1)
+
+        # Make the call
+        try:
+            public_url = PUBLIC_URL.rstrip("/")
+            twiml_url = "{}/incoming-call".format(public_url)
+            status_url = "{}/call-status".format(public_url)
+            client = TwilioClient(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
+            call = client.calls.create(
+                to=phone_number,
+                from_=TWILIO_PHONE_NUMBER,
+                url=twiml_url,
+                status_callback=status_url,
+                status_callback_event=["completed", "no-answer", "busy", "failed", "canceled"],
+            )
+            active_leads[call.sid] = form_data
+            active_leads[phone_number] = form_data
+            call_sid_to_phone[call.sid] = phone_number
+            logger.info("RETRY: Call initiated SID=%s", call.sid)
+        except Exception:
+            logger.exception("RETRY: Failed to call %s", phone_number)
+
+    timer = threading.Timer(delay, do_retry)
+    timer.daemon = True
+    timer.start()
+
 
 @app.route("/make-call", methods=["POST"])
 def make_call():
@@ -145,16 +337,34 @@ def make_call():
     twiml_url = "{}/incoming-call".format(public_url)
 
     try:
+        status_url = "{}/call-status".format(public_url)
+        amd_url = "{}/amd-status".format(public_url)
         client = TwilioClient(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
         call = client.calls.create(
             to=to_number,
             from_=TWILIO_PHONE_NUMBER,
             url=twiml_url,
+            status_callback=status_url,
+            status_callback_event=["completed", "no-answer", "busy", "failed", "canceled"],
+            machine_detection="Enable",
+            async_amd=True,
+            async_amd_status_callback=amd_url,
+            async_amd_status_callback_method="POST",
         )
         # Store lead data for this call
         active_leads[call.sid] = lead_data
         # Also store by phone number as fallback
         active_leads[to_number] = lead_data
+        # Map call SID to phone for status callback
+        call_sid_to_phone[call.sid] = to_number
+
+        # Initialize retry tracking if first attempt
+        if to_number not in call_retries:
+            call_retries[to_number] = {
+                "attempt": 0,
+                "form_data": lead_data,
+                "answered": False,
+            }
 
         logger.info("Outbound call initiated: %s -> %s  SID=%s", TWILIO_PHONE_NUMBER, to_number, call.sid)
         logger.info("Lead data: %s %s - %s - fatturato: %s - budget: %s",
@@ -189,7 +399,7 @@ def calendly_webhook():
         # ADV: e780bd22-cd3b-44ad-8f7a-7322ad9a23bf
         ALLOWED_EVENT_TYPES = [
             "04873ccb-e62c-49d8-8e31-1b357e19232d",  # TEST TWILLIO CHIAMATE
-            "e780bd22-cd3b-44ad-8f7a-7322ad9a23bf",  # Consulenza Strategica Gratuita LinkedIn (adv)
+            # "e780bd22-cd3b-44ad-8f7a-7322ad9a23bf",  # Consulenza Strategica Gratuita LinkedIn (adv) - DISABILITATO
         ]
         event_uri_check = event_type_uri + event_type_from_event
         is_allowed = any(eid in event_uri_check for eid in ALLOWED_EVENT_TYPES)
@@ -208,6 +418,13 @@ def calendly_webhook():
         to_number = invitee.get("text_reminder_number", "")
         questions = invitee.get("questions_and_answers", [])
 
+        # Extract meeting link from event location
+        location = event.get("location", {})
+        meeting_link = location.get("join_url", "") or location.get("location", "")
+        if not meeting_link:
+            # Try from event itself
+            meeting_link = event.get("join_url", "")
+
         # Extract form answers
         form_data = {
             "nome": invitee.get("first_name", ""),
@@ -216,6 +433,7 @@ def calendly_webhook():
             "cellulare": to_number,
             "data_consulenza": event.get("start_time", ""),
             "ora_consulenza": event.get("start_time", ""),
+            "meeting_link": meeting_link,
         }
 
         # Map question answers
@@ -293,9 +511,204 @@ def calendly_webhook():
         return make_call()
 
 
+@app.route("/call-status", methods=["POST"])
+def call_status():
+    """Twilio status callback - detect no-answer and schedule retry."""
+    call_sid = request.form.get("CallSid", "")
+    call_status = request.form.get("CallStatus", "")
+    phone_number = call_sid_to_phone.get(call_sid, "")
+
+    logger.info("CALL STATUS: SID=%s Status=%s Phone=%s", call_sid, call_status, phone_number)
+
+    if not phone_number:
+        return {"status": "ok"}
+
+    if call_status == "completed":
+        # Lead answered - mark as answered, no more retries
+        if phone_number in call_retries:
+            call_retries[phone_number]["answered"] = True
+            logger.info("RETRY: Lead %s answered - no more retries", phone_number)
+    elif call_status in ("no-answer", "busy", "failed", "canceled"):
+        # Lead didn't answer - schedule retry
+        logger.info("RETRY: Lead %s did not answer (status: %s)", phone_number, call_status)
+        schedule_retry(phone_number)
+
+    return {"status": "ok"}
+
+
+@app.route("/amd-status", methods=["POST"])
+def amd_status():
+    """Answering Machine Detection callback. Hang up if voicemail detected."""
+    call_sid = request.form.get("CallSid", "")
+    answered_by = request.form.get("AnsweredBy", "")
+    logger.info("AMD: SID=%s AnsweredBy=%s", call_sid, answered_by)
+
+    if answered_by in ("machine_start", "machine_end_beep", "machine_end_silence", "machine_end_other", "fax"):
+        # It's a voicemail/machine - hang up immediately
+        logger.info("AMD: Voicemail detected for SID=%s, hanging up", call_sid)
+        try:
+            client = TwilioClient(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
+            client.calls(call_sid).update(status="completed")
+        except Exception:
+            logger.exception("AMD: Failed to hang up call %s", call_sid)
+
+    return {"status": "ok"}
+
+
+@app.route("/whatsapp-incoming", methods=["POST"])
+def whatsapp_incoming():
+    """Handle incoming WhatsApp replies. If lead asks to be called, trigger call."""
+    from_number = request.form.get("From", "").replace("whatsapp:", "")
+    body = request.form.get("Body", "").lower().strip()
+    logger.info("WHATSAPP IN: From=%s Body='%s'", from_number, body)
+
+    # Check for STOP / opt-out
+    stop_keywords = ["stop", "basta", "non contattare", "non chiamare", "cancella"]
+    if any(kw in body for kw in stop_keywords):
+        opted_out_numbers.add(from_number)
+        if from_number in call_retries:
+            call_retries[from_number]["answered"] = True  # Stop retries
+        logger.info("WHATSAPP IN: Lead %s opted out (STOP)", from_number)
+        # Send confirmation
+        try:
+            client = TwilioClient(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
+            client.messages.create(
+                to="whatsapp:{}".format(from_number),
+                from_="whatsapp:{}".format(TWILIO_WHATSAPP_NUMBER),
+                body="Ricevuto. Non la contatteremo piu'. Se cambia idea, puo' sempre riprenotare. Buona giornata!"
+            )
+        except Exception:
+            logger.exception("WHATSAPP IN: Failed to send STOP confirmation")
+        return {"status": "ok"}
+
+    # Check if this person has pending retry data
+    retry_info = call_retries.get(from_number)
+    if not retry_info:
+        logger.info("WHATSAPP IN: No retry data for %s, ignoring", from_number)
+        return {"status": "ok"}
+
+    # Check if lead wants to be called
+    call_keywords = ["chiamami", "chiama", "chiamare", "richiamare", "richiama",
+                      "si chiama", "ok chiama", "va bene", "chiamatemi"]
+    wants_call = any(kw in body for kw in call_keywords)
+
+    if wants_call:
+        logger.info("WHATSAPP IN: Lead %s wants to be called NOW", from_number)
+        retry_info["answered"] = True  # Stop scheduled retries
+
+        form_data = retry_info["form_data"]
+        # Trigger call immediately
+        try:
+            public_url = PUBLIC_URL.rstrip("/")
+            twiml_url = "{}/incoming-call".format(public_url)
+            status_url = "{}/call-status".format(public_url)
+            client = TwilioClient(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
+            call = client.calls.create(
+                to=from_number,
+                from_=TWILIO_PHONE_NUMBER,
+                url=twiml_url,
+                status_callback=status_url,
+                status_callback_event=["completed", "no-answer", "busy", "failed", "canceled"],
+            )
+            active_leads[call.sid] = form_data
+            active_leads[from_number] = form_data
+            call_sid_to_phone[call.sid] = from_number
+            logger.info("WHATSAPP IN: Call triggered for %s - SID=%s", from_number, call.sid)
+        except Exception:
+            logger.exception("WHATSAPP IN: Failed to call %s", from_number)
+
+    return {"status": "ok"}
+
+
 @app.route("/health", methods=["GET"])
 def health():
     return {"status": "ok"}
+
+
+@app.route("/dashboard", methods=["GET"])
+def dashboard():
+    """Simple dashboard showing all calls, status, and transcripts."""
+    rows = ""
+    for i, c in enumerate(reversed(call_history)):
+        status_color = "#4CAF50" if c["status"] == "qualificato" else "#f44336"
+        transcript_id = "transcript_{}".format(i)
+        rows += """
+        <tr>
+            <td>{timestamp}</td>
+            <td>{nome} {cognome}</td>
+            <td>{phone}</td>
+            <td>{ruolo}</td>
+            <td>{obiettivi}</td>
+            <td><span style="background:{color};color:white;padding:3px 8px;border-radius:4px">{status}</span></td>
+            <td><button onclick="document.getElementById('{tid}').style.display=document.getElementById('{tid}').style.display==='none'?'block':'none'" style="cursor:pointer;background:#2196F3;color:white;border:none;padding:5px 10px;border-radius:4px">Vedi</button>
+                <pre id="{tid}" style="display:none;white-space:pre-wrap;max-width:500px;background:#1a1a2e;padding:10px;border-radius:4px;margin-top:5px">{transcript}</pre></td>
+        </tr>""".format(
+            timestamp=c["timestamp"],
+            nome=c["nome"], cognome=c["cognome"],
+            phone=c["phone"], ruolo=c["ruolo"] or "-",
+            obiettivi=c.get("obiettivi", "") or "-",
+            color=status_color, status=c["status"],
+            tid=transcript_id,
+            transcript=c["transcript"] or "Nessuna trascrizione"
+        )
+
+    # Stats
+    total = len(call_history)
+    qualified = sum(1 for c in call_history if c["status"] == "qualificato")
+    not_qualified = total - qualified
+
+    # Retry stats
+    active_retries = sum(1 for r in call_retries.values() if not r.get("answered") and r["attempt"] < len(RETRY_INTERVALS))
+    stopped = len(opted_out_numbers)
+
+    html = """<!DOCTYPE html>
+<html><head>
+<title>Stefania AI Setter - Dashboard</title>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+    body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #0f0f23; color: #e0e0e0; margin: 0; padding: 20px; }}
+    h1 {{ color: #fff; margin-bottom: 5px; }}
+    .subtitle {{ color: #888; margin-bottom: 30px; }}
+    .stats {{ display: flex; gap: 20px; margin-bottom: 30px; flex-wrap: wrap; }}
+    .stat {{ background: #1a1a2e; padding: 20px; border-radius: 10px; min-width: 150px; }}
+    .stat-number {{ font-size: 36px; font-weight: bold; }}
+    .stat-label {{ color: #888; margin-top: 5px; }}
+    .green {{ color: #4CAF50; }}
+    .red {{ color: #f44336; }}
+    .blue {{ color: #2196F3; }}
+    .orange {{ color: #FF9800; }}
+    table {{ width: 100%; border-collapse: collapse; background: #1a1a2e; border-radius: 10px; overflow: hidden; }}
+    th {{ background: #16213e; padding: 12px; text-align: left; color: #888; font-size: 12px; text-transform: uppercase; }}
+    td {{ padding: 12px; border-top: 1px solid #2a2a4a; }}
+    tr:hover {{ background: #16213e; }}
+    .refresh {{ color: #2196F3; text-decoration: none; }}
+</style>
+</head><body>
+<h1>Stefania AI Setter</h1>
+<p class="subtitle">DC Academy - Dashboard Chiamate <a href="/dashboard" class="refresh">Aggiorna</a></p>
+
+<div class="stats">
+    <div class="stat"><div class="stat-number blue">{total}</div><div class="stat-label">Totale chiamate</div></div>
+    <div class="stat"><div class="stat-number green">{qualified}</div><div class="stat-label">Qualificati</div></div>
+    <div class="stat"><div class="stat-number red">{not_qualified}</div><div class="stat-label">Non qualificati</div></div>
+    <div class="stat"><div class="stat-number orange">{active_retries}</div><div class="stat-label">Retry attivi</div></div>
+    <div class="stat"><div class="stat-number red">{stopped}</div><div class="stat-label">STOP (opt-out)</div></div>
+</div>
+
+<table>
+<tr><th>Data/Ora</th><th>Nome</th><th>Telefono</th><th>Ruolo</th><th>Obiettivo</th><th>Esito</th><th>Trascrizione</th></tr>
+{rows}
+</table>
+
+{empty}
+</body></html>""".format(
+        total=total, qualified=qualified, not_qualified=not_qualified,
+        active_retries=active_retries, stopped=stopped,
+        rows=rows,
+        empty='<p style="text-align:center;color:#888;margin-top:40px">Nessuna chiamata ancora</p>' if not rows else ""
+    )
+    return Response(html, mimetype="text/html")
 
 
 # ---------------------------------------------------------------------------
@@ -353,9 +766,11 @@ class ConversationManager:
         self.client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
         self.system_prompt = system_prompt
         self.messages = []
+        self.transcript_log = []  # [(role, text), ...]
 
     def get_response(self, user_text):
         self.messages.append({"role": "user", "content": user_text})
+        self.transcript_log.append(("Lead", user_text))
         logger.info("User said: %s", user_text)
 
         try:
@@ -367,6 +782,7 @@ class ConversationManager:
             )
             assistant_text = response.content[0].text.strip()
             self.messages.append({"role": "assistant", "content": assistant_text})
+            self.transcript_log.append(("Stefania", assistant_text))
             logger.info("Stefania says: %s", assistant_text)
             return assistant_text
         except Exception:
@@ -494,9 +910,18 @@ def handle_media_stream(ws):
     def process_transcripts():
         """Read final transcripts, get Claude response, speak it."""
         buf = ""
+        last_activity = time.time()
+        silence_warning_sent = False
+        SILENCE_WARNING_SECS = 15  # Ask "mi sente?" after 15s silence
+        SILENCE_HANGUP_SECS = 30   # Hang up after 30s total silence
+
         while not stop_event.is_set():
             try:
                 text = transcript_q.get(timeout=1.0)
+
+                # Reset silence tracking on any input
+                last_activity = time.time()
+                silence_warning_sent = False
 
                 # Wait for conversation to be initialized
                 if conversation is None:
@@ -529,6 +954,7 @@ def handle_media_stream(ws):
 
                 response_text = conversation.get_response(user_input)
                 speak(response_text)
+                last_activity = time.time()
 
             except queue.Empty:
                 # Timeout -- check if there's buffered text
@@ -537,6 +963,30 @@ def handle_media_stream(ws):
                     buf = ""
                     response_text = conversation.get_response(user_input)
                     speak(response_text)
+                    last_activity = time.time()
+                    continue
+
+                # Silence timeout check (only after opening message)
+                if conversation and not is_speaking.is_set():
+                    silence_duration = time.time() - last_activity
+
+                    if silence_duration >= SILENCE_HANGUP_SECS and silence_warning_sent:
+                        # Too long silence after warning - hang up
+                        logger.info("SILENCE: Hanging up after %ds of silence", int(silence_duration))
+                        speak("Non la sento piu'. La richiamero' tra poco. Buona giornata!")
+                        stop_event.set()
+                        break
+
+                    elif silence_duration >= SILENCE_WARNING_SECS and not silence_warning_sent:
+                        # First warning
+                        lead_first = lead_data.get("nome", "").strip() if lead_data else ""
+                        if lead_first:
+                            speak("{}, e' ancora in linea? Mi sente bene?".format(lead_first))
+                        else:
+                            speak("E' ancora in linea? Mi sente bene?")
+                        silence_warning_sent = True
+                        last_activity = time.time()  # Reset to give them time to respond
+
                 continue
             except Exception:
                 logger.exception("Error in transcript processing")
@@ -644,12 +1094,80 @@ def handle_media_stream(ws):
             dg_ws.close()
         except Exception:
             pass
+
+        # Save call to history and notify Davide
+        if conversation and lead_data:
+            phone = lead_data.get("cellulare", "")
+            transcript_text = "\n".join(
+                "{}: {}".format(role, text) for role, text in conversation.transcript_log
+            )
+            # Determine if qualified (check if Stefania confirmed the consultation)
+            full_text = " ".join(t for _, t in conversation.transcript_log).lower()
+            qualified = "confermo la consulenza" in full_text
+
+            entry = {
+                "phone": phone,
+                "nome": lead_data.get("nome", ""),
+                "cognome": lead_data.get("cognome", ""),
+                "ruolo": lead_data.get("ruolo", ""),
+                "obiettivi": lead_data.get("obiettivi_linkedin", ""),
+                "status": "qualificato" if qualified else "non qualificato",
+                "transcript": transcript_text,
+                "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M"),
+                "data_consulenza": lead_data.get("data_consulenza", ""),
+            }
+            call_history.append(entry)
+            logger.info("Call saved to history: %s %s - %s", entry["nome"], entry["cognome"], entry["status"])
+
+            # Schedule pre-consultation reminder if qualified
+            if qualified and phone:
+                schedule_reminder(phone, lead_data)
+
+            # Notify Davide via WhatsApp with summary + link to transcript
+            if transcript_text:
+                summary = "CALL COMPLETATA\n{} {} - {}\nRuolo: {}\nObiettivo: {}\nEsito: {}\n\nTrascrizione:\n{}".format(
+                    entry["nome"], entry["cognome"], entry["phone"],
+                    entry["ruolo"] or "N/A",
+                    entry["obiettivi"] or "N/A",
+                    entry["status"].upper(),
+                    transcript_text[:1400]
+                )
+                def notify_davide():
+                    try:
+                        client = TwilioClient(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
+                        client.messages.create(
+                            to="whatsapp:{}".format(DAVIDE_PHONE),
+                            from_="whatsapp:{}".format(TWILIO_WHATSAPP_NUMBER),
+                            body=summary,
+                        )
+                        logger.info("Notifica a Davide inviata")
+                    except Exception:
+                        logger.exception("Errore notifica Davide")
+                threading.Thread(target=notify_davide, daemon=True).start()
+
         logger.info("Media stream handler finished")
 
 
 # ---------------------------------------------------------------------------
 # Start server
 # ---------------------------------------------------------------------------
+
+# ---------------------------------------------------------------------------
+# Keep-alive ping (prevents Render free tier from sleeping)
+# ---------------------------------------------------------------------------
+def keep_alive():
+    """Ping own /health endpoint every 10 minutes to prevent Render sleep."""
+    while True:
+        time.sleep(600)  # 10 minutes
+        try:
+            httpx.get("{}/health".format(PUBLIC_URL), timeout=10.0)
+            logger.info("KEEPALIVE: Ping sent")
+        except Exception:
+            logger.warning("KEEPALIVE: Ping failed")
+
+keepalive_thread = threading.Thread(target=keep_alive, daemon=True)
+keepalive_thread.start()
+
 
 if __name__ == "__main__":
     logger.info("=" * 60)
