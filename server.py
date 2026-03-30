@@ -404,7 +404,7 @@ def calendly_webhook():
         event_uri_check = event_type_uri + event_type_from_event
         is_allowed = any(eid in event_uri_check for eid in ALLOWED_EVENT_TYPES)
         if not is_allowed and event_type_name:
-            is_allowed = "TEST TWILLIO" in event_type_name.upper() or "ADV" in event_type_name.upper()
+            is_allowed = "TEST TWILLIO" in event_type_name.upper()
         if not is_allowed:
             logger.info("BLOCKED: Event not in allowed list. URI: %s", event_uri_check)
             return {"status": "ignored", "reason": "not allowed event type"}
