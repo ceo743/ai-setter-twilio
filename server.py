@@ -818,9 +818,18 @@ def handle_media_stream(ws):
               "?model=nova-2&language=it&encoding=mulaw&sample_rate=8000"
               "&channels=1&punctuate=true&interim_results=false&endpointing=300")
 
-    dg_ws = websocket.WebSocket()
+    dg_ws_lock = threading.Lock()
+    dg_ws_container = [None]  # mutable container for reconnect
+
+    def connect_deepgram():
+        """Connect (or reconnect) to Deepgram WebSocket."""
+        new_ws = websocket.WebSocket()
+        new_ws.settimeout(10)  # 10s timeout to prevent hanging
+        new_ws.connect(dg_url, header=["Authorization: Token {}".format(DEEPGRAM_API_KEY)])
+        return new_ws
+
     try:
-        dg_ws.connect(dg_url, header=["Authorization: Token {}".format(DEEPGRAM_API_KEY)])
+        dg_ws_container[0] = connect_deepgram()
         logger.info("Deepgram WebSocket connected")
         dg_ready.set()
     except Exception:
@@ -828,11 +837,15 @@ def handle_media_stream(ws):
         ws.close()
         return
 
-    # Background thread to read Deepgram results
+    # Background thread to read Deepgram results (with auto-reconnect)
     def read_deepgram():
         while not stop_event.is_set():
             try:
-                result_raw = dg_ws.recv()
+                dg = dg_ws_container[0]
+                if dg is None:
+                    time.sleep(0.5)
+                    continue
+                result_raw = dg.recv()
                 if not result_raw:
                     continue
                 result = json.loads(result_raw)
@@ -841,12 +854,21 @@ def handle_media_stream(ws):
                     if transcript:
                         logger.info("Deepgram final transcript: %s", transcript)
                         transcript_q.put(transcript)
+            except websocket.WebSocketTimeoutException:
+                # Timeout is normal — just means no speech detected, continue
+                continue
             except Exception as e:
-                if not stop_event.is_set():
-                    logger.exception("Deepgram read error: %s", e)
-                else:
+                if stop_event.is_set():
                     logger.info("Deepgram read ended (stop_event set)")
-                break
+                    break
+                logger.warning("Deepgram read error, reconnecting: %s", e)
+                try:
+                    with dg_ws_lock:
+                        dg_ws_container[0] = connect_deepgram()
+                    logger.info("Deepgram reconnected successfully")
+                except Exception:
+                    logger.exception("Deepgram reconnect failed")
+                    time.sleep(1)
 
     dg_thread = threading.Thread(target=read_deepgram, daemon=True)
     dg_thread.start()
@@ -1084,9 +1106,12 @@ def handle_media_stream(ws):
                 payload = data["media"]["payload"]
                 audio_bytes = base64.b64decode(payload)
                 try:
-                    dg_ws.send_binary(audio_bytes)
+                    dg = dg_ws_container[0]
+                    if dg:
+                        with dg_ws_lock:
+                            dg.send_binary(audio_bytes)
                 except Exception:
-                    logger.exception("Error sending audio to Deepgram")
+                    logger.warning("Error sending audio to Deepgram")
 
             elif event == "stop":
                 logger.info("Stream stopped")
@@ -1098,7 +1123,9 @@ def handle_media_stream(ws):
         stop_event.set()
         transcript_thread.join(timeout=5.0)
         try:
-            dg_ws.close()
+            dg = dg_ws_container[0]
+            if dg:
+                dg.close()
         except Exception:
             pass
 
