@@ -45,6 +45,12 @@ ELEVENLABS_VOICE_ID = os.getenv("ELEVENLABS_VOICE_ID")
 DEEPGRAM_API_KEY = os.getenv("DEEPGRAM_API_KEY")
 PUBLIC_URL = os.getenv("PUBLIC_URL", "")
 
+# Fix: if PUBLIC_URL is empty or points to dead serveo tunnel, clear it
+# so the server uses request.headers["Host"] which works on Render automatically
+if "serveo" in PUBLIC_URL:
+    logger.warning("PUBLIC_URL points to old serveo tunnel, ignoring it")
+    PUBLIC_URL = ""
+
 SERVER_HOST = os.getenv("SERVER_HOST", "0.0.0.0")
 SERVER_PORT = int(os.getenv("PORT", os.getenv("SERVER_PORT", "8080")))
 
