@@ -874,6 +874,7 @@ def handle_media_stream(ws):
 
     # Flag to ignore input while AI is speaking
     is_speaking = threading.Event()
+    speaking_ended_at = [0.0]  # timestamp when speaking ended (for echo cooldown)
 
     # --- Helper: speak text via TTS -> Twilio ---
     def speak(text):
@@ -899,6 +900,7 @@ def handle_media_stream(ws):
             logger.exception("TTS streaming error")
         finally:
             is_speaking.clear()
+            speaking_ended_at[0] = time.time()
             # Drain transcripts that came in while speaking (echo/feedback)
             while not transcript_q.empty():
                 try:
@@ -930,6 +932,11 @@ def handle_media_stream(ws):
                 # Ignore input while AI is speaking (prevents echo/repeat)
                 if is_speaking.is_set():
                     logger.info("Ignoring input while speaking: %s", text)
+                    continue
+
+                # Ignore echo in the 1.5s after speaking ends
+                if time.time() - speaking_ended_at[0] < 1.5:
+                    logger.info("Ignoring echo after speaking: %s", text)
                     continue
 
                 if buf:
