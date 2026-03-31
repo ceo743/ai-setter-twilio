@@ -858,100 +858,75 @@ def handle_media_stream(ws):
     conversation = None  # initialized after we get call info
     stop_event = threading.Event()
 
-    # --- Deepgram live transcription via WebSocketApp (event-driven) ---
-    # FIXES APPLIED:
-    # 1. NO ping_interval/ping_timeout — WS pings can kill connection if Deepgram doesn't pong
-    # 2. NEW WebSocketApp on each reconnect — reusing same instance has stale keep_running=False
-    # 3. KeepAlive {"type":"KeepAlive"} every 5s prevents Deepgram NET-0001 timeout
-    # 4. on_close signature with defaults for cross-version compatibility
+    # --- Deepgram live transcription via raw WebSocket ---
+    # PROVEN WORKING: logs show raw WebSocket produced transcripts (12:06 call).
+    # WebSocketApp did NOT work (on_message not called during call).
+    # Using raw WebSocket + blocking recv in dedicated thread + send_binary from main thread.
+    # Added KeepAlive every 5s to prevent NET-0001 timeout.
     transcript_q = queue.Queue()
     dg_ready = threading.Event()
-    dg_app_container = [None]
+    dg_ws_container = [None]
 
     dg_url = ("wss://api.deepgram.com/v1/listen"
               "?model=nova-2&language=it&encoding=mulaw&sample_rate=8000"
               "&channels=1&punctuate=true&interim_results=false&endpointing=300")
 
-    def _on_dg_open(ws_app):
-        logger.info("Deepgram WebSocket OPEN")
+    try:
+        dg = websocket.WebSocket()
+        dg.connect(dg_url, header=["Authorization: Token {}".format(DEEPGRAM_API_KEY)])
+        dg_ws_container[0] = dg
+        logger.info("Deepgram WebSocket connected")
         dg_ready.set()
+    except Exception:
+        logger.exception("Failed to connect to Deepgram")
+        ws.close()
+        return
 
-    def _on_dg_message(ws_app, message):
-        try:
-            result = json.loads(message)
-            msg_type = result.get("type", "unknown")
-            if msg_type == "Results":
-                is_final = result.get("is_final", False)
-                transcript = (result.get("channel", {})
-                              .get("alternatives", [{}])[0]
-                              .get("transcript", ""))
-                if is_final and transcript:
-                    logger.info("Deepgram final transcript: %s", transcript)
-                    transcript_q.put(transcript)
-            elif msg_type == "Metadata":
-                logger.info("Deepgram metadata: request_id=%s", result.get("request_id", "N/A"))
-        except Exception:
-            logger.exception("Deepgram message parse error")
-
-    def _on_dg_error(ws_app, error):
-        logger.warning("Deepgram WebSocket ERROR: %s", error)
-
-    def _on_dg_close(ws_app, close_code=None, close_msg=None):
-        logger.info("Deepgram WebSocket CLOSED: code=%s msg=%s", close_code, close_msg)
-
-    def _create_dg_app():
-        """Create a FRESH WebSocketApp instance (never reuse after close)."""
-        app = websocket.WebSocketApp(
-            dg_url,
-            header=["Authorization: Token {}".format(DEEPGRAM_API_KEY)],
-            on_open=_on_dg_open,
-            on_message=_on_dg_message,
-            on_error=_on_dg_error,
-            on_close=_on_dg_close,
-        )
-        dg_app_container[0] = app
-        return app
-
-    # run_forever in background thread — creates NEW instance on each reconnect
-    def run_deepgram():
+    # Background thread: read Deepgram results (blocking recv, no timeout)
+    def read_deepgram():
         while not stop_event.is_set():
             try:
-                app = _create_dg_app()
-                logger.info("Deepgram: starting run_forever (new instance)...")
-                # NO ping_interval/ping_timeout — Deepgram may not reply to WS pings,
-                # causing websocket-client to forcibly kill the connection!
-                app.run_forever()
+                dg = dg_ws_container[0]
+                if dg is None:
+                    time.sleep(0.5)
+                    continue
+                result_raw = dg.recv()
+                if not result_raw:
+                    continue
+                result = json.loads(result_raw)
+                msg_type = result.get("type", "unknown")
+                if msg_type == "Results":
+                    is_final = result.get("is_final", False)
+                    transcript = (result.get("channel", {})
+                                  .get("alternatives", [{}])[0]
+                                  .get("transcript", ""))
+                    if is_final and transcript:
+                        logger.info("Deepgram final transcript: %s", transcript)
+                        transcript_q.put(transcript)
+                elif msg_type == "Metadata":
+                    logger.info("Deepgram metadata: request_id=%s", result.get("request_id", "N/A"))
             except Exception as e:
-                logger.warning("Deepgram run_forever error: %s", e)
-            if not stop_event.is_set():
-                logger.info("Deepgram: disconnected, reconnecting in 1s...")
-                time.sleep(1)
-                dg_ready.clear()
+                if stop_event.is_set():
+                    break
+                logger.warning("Deepgram read error: %s", e)
+                time.sleep(0.5)
 
-    dg_thread = threading.Thread(target=run_deepgram, daemon=True)
+    dg_thread = threading.Thread(target=read_deepgram, daemon=True)
     dg_thread.start()
 
-    # Deepgram KeepAlive thread — sends {"type": "KeepAlive"} every 5s
-    # This is the APPLICATION-LEVEL keepalive that Deepgram requires (not WS pings)
+    # KeepAlive thread — sends {"type": "KeepAlive"} every 5s to prevent NET-0001 timeout
     def deepgram_keepalive():
         while not stop_event.is_set():
             time.sleep(5)
             try:
-                app = dg_app_container[0]
-                if app and app.sock and app.sock.connected:
-                    app.send(json.dumps({"type": "KeepAlive"}))
-                    logger.debug("Deepgram KeepAlive sent")
+                dg = dg_ws_container[0]
+                if dg and dg.connected:
+                    dg.send(json.dumps({"type": "KeepAlive"}))
             except Exception:
-                pass  # will reconnect via run_forever loop
+                pass
 
     ka_thread = threading.Thread(target=deepgram_keepalive, daemon=True)
     ka_thread.start()
-
-    # Wait for Deepgram to be ready before proceeding
-    if not dg_ready.wait(timeout=10):
-        logger.error("Deepgram failed to connect within 10s")
-        ws.close()
-        return
 
     # Lock for sending on the websocket (flask-sock ws is not thread-safe)
     ws_send_lock = threading.Lock()
@@ -1189,21 +1164,18 @@ def handle_media_stream(ws):
                     threading.Thread(target=speak, args=(opening,), daemon=True).start()
 
             elif event == "media":
-                # Forward raw mu-law audio to Deepgram via WebSocketApp
+                # Forward raw mu-law audio to Deepgram via raw WebSocket
                 payload = data["media"]["payload"]
                 audio_bytes = base64.b64decode(payload)
                 audio_packet_count[0] += 1
                 if audio_packet_count[0] % 500 == 1:
                     logger.info("Audio packets sent to Deepgram: %d", audio_packet_count[0])
-                # CRITICAL: guard empty bytes (causes Deepgram to close)
                 if len(audio_bytes) == 0:
                     continue
                 try:
-                    app = dg_app_container[0]
-                    if app and app.sock and app.sock.connected:
-                        app.send(audio_bytes, opcode=websocket.ABNF.OPCODE_BINARY)
-                    else:
-                        logger.warning("Deepgram socket not connected, dropping audio packet %d", audio_packet_count[0])
+                    dg = dg_ws_container[0]
+                    if dg and dg.connected:
+                        dg.send_binary(audio_bytes)
                 except Exception as e:
                     logger.warning("Error sending audio to Deepgram: %s", e)
 
@@ -1217,12 +1189,11 @@ def handle_media_stream(ws):
         stop_event.set()
         transcript_thread.join(timeout=5.0)
         try:
-            app = dg_app_container[0]
-            if app and app.sock and app.sock.connected:
-                # Send CloseStream to flush Deepgram buffer before closing
-                app.send(json.dumps({"type": "CloseStream"}))
-                time.sleep(0.5)
-                app.close()
+            dg = dg_ws_container[0]
+            if dg and dg.connected:
+                dg.send(json.dumps({"type": "CloseStream"}))
+                time.sleep(0.3)
+                dg.close()
         except Exception:
             pass
 
