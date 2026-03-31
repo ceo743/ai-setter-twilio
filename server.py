@@ -92,7 +92,8 @@ transcripts_store = {}
 def save_transcript(entry, transcript_text):
     """Save transcript and return its public URL."""
     tid = uuid.uuid4().hex[:10]
-    esito = "Confermato" if entry["status"] == "qualificato" else "Non Confermato"
+    esito_map = {"qualificato": "Confermato", "non in target": "Non Confermato", "da confermare": "Da Confermare"}
+    esito = esito_map.get(entry["status"], "Da Confermare")
     transcripts_store[tid] = {
         "nome": entry.get("nome", "N/A"),
         "cognome": entry.get("cognome", "N/A"),
@@ -1297,9 +1298,15 @@ def handle_media_stream(ws):
             transcript_text = "\n".join(
                 "{}: {}".format(role, text) for role, text in conversation.transcript_log
             )
-            # Determine if qualified (check if Stefania confirmed the consultation)
+            # Determine call outcome
             full_text = " ".join(t for _, t in conversation.transcript_log).lower()
-            qualified = "confermo la consulenza" in full_text
+            non_target_phrases = ["non sono interessat", "non mi interessa", "non fa per me", "non e' il momento", "non è il momento", "non ho tempo", "non ho bisogno"]
+            if any(phrase in full_text for phrase in non_target_phrases):
+                status = "non in target"
+            elif "confermo la consulenza" in full_text:
+                status = "qualificato"
+            else:
+                status = "da confermare"
 
             entry = {
                 "phone": phone,
@@ -1307,7 +1314,7 @@ def handle_media_stream(ws):
                 "cognome": lead_data.get("cognome", ""),
                 "ruolo": lead_data.get("ruolo", ""),
                 "obiettivi": lead_data.get("obiettivi_linkedin", ""),
-                "status": "qualificato" if qualified else "non qualificato",
+                "status": status,
                 "transcript": transcript_text,
                 "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M"),
                 "data_consulenza": lead_data.get("data_consulenza", ""),
@@ -1322,7 +1329,8 @@ def handle_media_stream(ws):
             # Save transcript and notify Davide via WhatsApp with link
             if transcript_text:
                 transcript_url = save_transcript(entry, transcript_text)
-                esito = "Confermato" if entry["status"] == "qualificato" else "Non Confermato"
+                esito_map = {"qualificato": "Confermato", "non in target": "Non Confermato", "da confermare": "Da Confermare"}
+                esito = esito_map.get(entry["status"], "Da Confermare")
                 summary = "📞 CALL COMPLETATA\n{} {} - {}\nRuolo: {}\nEsito: {}\n\n📄 Trascrizione completa:\n{}".format(
                     entry["nome"], entry["cognome"], entry["phone"],
                     entry["ruolo"] or "N/A",
