@@ -1044,7 +1044,6 @@ def handle_media_stream(ws):
         except Exception:
             logger.exception("TTS streaming error")
         finally:
-            is_speaking.clear()
             # Estimate when audio finishes PLAYING on the phone
             # mulaw 8000Hz = 8000 bytes/sec
             streaming_elapsed = time.time() - speak_start
@@ -1054,12 +1053,19 @@ def handle_media_stream(ws):
             speaking_ended_at[0] = estimated_end
             playback_end_estimate[0] = estimated_end
             logger.info("TTS playback estimate: %.1fs total, %.1fs remaining", playback_duration, remaining_playback)
-            # Drain transcripts that came in while speaking (echo/feedback)
-            while not transcript_q.empty():
-                try:
-                    transcript_q.get_nowait()
-                except queue.Empty:
-                    break
+            # Keep is_speaking ON until playback finishes, then clear + drain echo
+            def _wait_and_clear():
+                if remaining_playback > 0:
+                    time.sleep(remaining_playback)
+                is_speaking.clear()
+                # Drain transcripts that came in during playback (echo)
+                while not transcript_q.empty():
+                    try:
+                        transcript_q.get_nowait()
+                    except queue.Empty:
+                        break
+                logger.info("is_speaking cleared after playback end")
+            threading.Thread(target=_wait_and_clear, daemon=True).start()
 
     # --- Background thread: process transcripts ---
     def process_transcripts():
