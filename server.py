@@ -1064,7 +1064,7 @@ def handle_media_stream(ws):
                 last_activity = time.time()
 
                 # Auto-hangup after farewell
-                if "buona giornata" in response_text.lower():
+                if "buona giornata" in response_text.lower() or "buona serata" in response_text.lower():
                     logger.info("HANGUP: Detected 'buona giornata' in response, closing call in 3s")
                     time.sleep(3)
                     stop_event.set()
@@ -1080,7 +1080,7 @@ def handle_media_stream(ws):
                     last_activity = time.time()
 
                     # Auto-hangup after farewell
-                    if "buona giornata" in response_text.lower():
+                    if "buona giornata" in response_text.lower() or "buona serata" in response_text.lower():
                         logger.info("HANGUP: Detected 'buona giornata' in response, closing call in 3s")
                         time.sleep(3)
                         stop_event.set()
