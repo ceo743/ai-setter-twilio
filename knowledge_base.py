@@ -188,6 +188,41 @@ Se NON QUALIFICATO:
 - La call NON deve durare piu' di 5-8 minuti
 """
 
+def _format_time_spoken(time_str):
+    """Converte '15:00' -> 'alle quindici', '10:30' -> 'alle dieci e trenta'."""
+    if not time_str:
+        return ""
+    try:
+        # Handle formats: "15:00", "15.00", "15"
+        time_str = time_str.strip().replace(".", ":")
+        parts = time_str.split(":")
+        hour = int(parts[0])
+        minute = int(parts[1]) if len(parts) > 1 else 0
+
+        ore_parole = {
+            0: "mezzanotte", 1: "una", 2: "due", 3: "tre", 4: "quattro",
+            5: "cinque", 6: "sei", 7: "sette", 8: "otto", 9: "nove",
+            10: "dieci", 11: "undici", 12: "dodici", 13: "tredici",
+            14: "quattordici", 15: "quindici", 16: "sedici", 17: "diciassette",
+            18: "diciotto", 19: "diciannove", 20: "venti", 21: "ventuno",
+            22: "ventidue", 23: "ventitré",
+        }
+        minuti_parole = {
+            0: "", 5: "e cinque", 10: "e dieci", 15: "e un quarto",
+            20: "e venti", 25: "e venticinque", 30: "e trenta",
+            35: "e trentacinque", 40: "e quaranta", 45: "e quarantacinque",
+            50: "e cinquanta", 55: "e cinquantacinque",
+        }
+        h_text = ore_parole.get(hour, str(hour))
+        m_text = minuti_parole.get(minute, "e {}".format(minute))
+        result = "alle {}".format(h_text)
+        if m_text:
+            result += " {}".format(m_text)
+        return result
+    except Exception:
+        return "alle {}".format(time_str)
+
+
 def get_knowledge_prompt(lead_name="", appointment_date="", appointment_time=""):
     """Restituisce il prompt completo con i dati del lead."""
     prompt = KNOWLEDGE_BASE
@@ -196,5 +231,6 @@ def get_knowledge_prompt(lead_name="", appointment_date="", appointment_time="")
     if appointment_date:
         prompt += f"- Data consulenza: {appointment_date}\n"
     if appointment_time:
-        prompt += f"- Ora consulenza: {appointment_time}\n"
+        spoken_time = _format_time_spoken(appointment_time)
+        prompt += f"- Ora consulenza: {spoken_time} (PRONUNCIA COSI', non dire numeri)\n"
     return prompt
