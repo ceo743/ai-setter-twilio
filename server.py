@@ -13,9 +13,11 @@ import json
 import logging
 import os
 import queue
+import smtplib
 import threading
 import time
 from datetime import datetime, timedelta
+from email.mime.text import MIMEText
 from typing import Optional
 
 import httpx
@@ -44,6 +46,8 @@ GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 ELEVENLABS_API_KEY = os.getenv("ELEVENLABS_API_KEY")
 ELEVENLABS_VOICE_ID = os.getenv("ELEVENLABS_VOICE_ID")
 DEEPGRAM_API_KEY = os.getenv("DEEPGRAM_API_KEY")
+DAVIDE_EMAIL = os.getenv("DAVIDE_EMAIL", "davide@mygovernance.it")
+GMAIL_APP_PASSWORD = os.getenv("GMAIL_APP_PASSWORD", "")
 PUBLIC_URL = os.getenv("PUBLIC_URL", "")
 
 # Fix: if PUBLIC_URL is empty or points to dead serveo tunnel, clear it
@@ -81,6 +85,50 @@ logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
 )
 logger = logging.getLogger("setter-agent")
+
+# ---------------------------------------------------------------------------
+# Email report post-call
+# ---------------------------------------------------------------------------
+def send_email_report(entry, transcript_text):
+    """Send post-call email report to Davide via Gmail SMTP."""
+    if not GMAIL_APP_PASSWORD:
+        logger.warning("GMAIL_APP_PASSWORD not set, skipping email report")
+        return
+    esito = "Confermato" if entry["status"] == "qualificato" else "Non Confermato"
+    nome = entry.get("nome", "N/A")
+    cognome = entry.get("cognome", "N/A")
+    ruolo = entry.get("ruolo", "N/A")
+    subject = "TWILIO_{}_{}_{}_{}".format(esito, nome, cognome, ruolo)
+    body = (
+        "REPORT CHIAMATA AI SETTER\n"
+        "========================\n\n"
+        "Nome: {} {}\n"
+        "Telefono: {}\n"
+        "Ruolo: {}\n"
+        "Obiettivo: {}\n"
+        "Esito: {}\n"
+        "Data consulenza: {}\n"
+        "Timestamp: {}\n\n"
+        "TRASCRIZIONE COMPLETA\n"
+        "---------------------\n{}"
+    ).format(
+        nome, cognome, entry.get("phone", "N/A"),
+        ruolo, entry.get("obiettivi", "N/A"),
+        esito, entry.get("data_consulenza", "N/A"),
+        entry.get("timestamp", ""), transcript_text
+    )
+    try:
+        msg = MIMEText(body, "plain", "utf-8")
+        msg["Subject"] = subject
+        msg["From"] = DAVIDE_EMAIL
+        msg["To"] = DAVIDE_EMAIL
+        with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
+            server.login(DAVIDE_EMAIL, GMAIL_APP_PASSWORD)
+            server.send_message(msg)
+        logger.info("Email report inviata a %s", DAVIDE_EMAIL)
+    except Exception:
+        logger.exception("Errore invio email report")
+
 
 # ---------------------------------------------------------------------------
 # Website scraping for lead intelligence
@@ -1286,6 +1334,11 @@ def handle_media_stream(ws):
                     except Exception:
                         logger.exception("Errore notifica Davide")
                 threading.Thread(target=notify_davide, daemon=True).start()
+
+            # Send full email report (transcript not truncated)
+            def email_report():
+                send_email_report(entry, transcript_text)
+            threading.Thread(target=email_report, daemon=True).start()
 
         logger.info("Media stream handler finished")
 
