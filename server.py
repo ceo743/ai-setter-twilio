@@ -1090,7 +1090,7 @@ def handle_media_stream(ws):
                 # Ignore echo while audio is still playing + 0.3s cooldown
                 # speaking_ended_at is estimated playback END time, not chunk-send time
                 time_since_playback_end = time.time() - speaking_ended_at[0]
-                if time_since_playback_end < 0.3:
+                if time_since_playback_end < 0.1:
                     logger.info("Ignoring echo (%.2fs since playback end): %s", time_since_playback_end, text)
                     continue
 
@@ -1323,7 +1323,7 @@ def handle_media_stream(ws):
             logger.info("Call saved to history: %s %s - %s", entry["nome"], entry["cognome"], entry["status"])
 
             # Schedule pre-consultation reminder if qualified
-            if qualified and phone:
+            if status == "qualificato" and phone:
                 schedule_reminder(phone, lead_data)
 
             # Save transcript and notify Davide via WhatsApp with link
