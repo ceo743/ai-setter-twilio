@@ -813,7 +813,7 @@ class ConversationManager:
 
     def __init__(self, system_prompt):
         # Force Italian language in system prompt
-        self.system_prompt = system_prompt + "\n\nREGOLA ASSOLUTA: Rispondi SEMPRE e SOLO in italiano. MAI una parola in inglese."
+        self.system_prompt = system_prompt + "\n\nREGOLE ASSOLUTE:\n1. Rispondi SEMPRE e SOLO in italiano. MAI una parola in inglese.\n2. Rispondi in MAX 2 frasi brevi e concise. Questa è una telefonata, non un'email. Sii naturale e diretta."
         self.messages = []
         self.transcript_log = []  # [(role, text), ...]
 
@@ -829,7 +829,7 @@ class ConversationManager:
                 headers={"Authorization": "Bearer {}".format(GROQ_API_KEY), "Content-Type": "application/json"},
                 json={
                     "model": "llama-3.3-70b-versatile",
-                    "max_tokens": 150,
+                    "max_tokens": 80,
                     "temperature": 0.7,
                     "messages": groq_messages,
                 },
