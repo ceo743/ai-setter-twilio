@@ -874,8 +874,11 @@ def handle_media_stream(ws):
     stop_event = threading.Event()
 
     # --- Deepgram live transcription via WebSocketApp (event-driven) ---
-    # WebSocketApp handles recv in run_forever(), send() is thread-safe.
-    # Added Deepgram-specific KeepAlive messages every 5s to prevent timeout.
+    # FIXES APPLIED:
+    # 1. NO ping_interval/ping_timeout — WS pings can kill connection if Deepgram doesn't pong
+    # 2. NEW WebSocketApp on each reconnect — reusing same instance has stale keep_running=False
+    # 3. KeepAlive {"type":"KeepAlive"} every 5s prevents Deepgram NET-0001 timeout
+    # 4. on_close signature with defaults for cross-version compatibility
     transcript_q = queue.Queue()
     dg_ready = threading.Event()
     dg_app_container = [None]
@@ -908,25 +911,31 @@ def handle_media_stream(ws):
     def _on_dg_error(ws_app, error):
         logger.warning("Deepgram WebSocket ERROR: %s", error)
 
-    def _on_dg_close(ws_app, close_code, close_msg):
+    def _on_dg_close(ws_app, close_code=None, close_msg=None):
         logger.info("Deepgram WebSocket CLOSED: code=%s msg=%s", close_code, close_msg)
 
-    dg_app = websocket.WebSocketApp(
-        dg_url,
-        header=["Authorization: Token {}".format(DEEPGRAM_API_KEY)],
-        on_open=_on_dg_open,
-        on_message=_on_dg_message,
-        on_error=_on_dg_error,
-        on_close=_on_dg_close,
-    )
-    dg_app_container[0] = dg_app
+    def _create_dg_app():
+        """Create a FRESH WebSocketApp instance (never reuse after close)."""
+        app = websocket.WebSocketApp(
+            dg_url,
+            header=["Authorization: Token {}".format(DEEPGRAM_API_KEY)],
+            on_open=_on_dg_open,
+            on_message=_on_dg_message,
+            on_error=_on_dg_error,
+            on_close=_on_dg_close,
+        )
+        dg_app_container[0] = app
+        return app
 
-    # run_forever in background thread
+    # run_forever in background thread — creates NEW instance on each reconnect
     def run_deepgram():
         while not stop_event.is_set():
             try:
-                logger.info("Deepgram: starting run_forever...")
-                dg_app.run_forever(ping_interval=10, ping_timeout=5)
+                app = _create_dg_app()
+                logger.info("Deepgram: starting run_forever (new instance)...")
+                # NO ping_interval/ping_timeout — Deepgram may not reply to WS pings,
+                # causing websocket-client to forcibly kill the connection!
+                app.run_forever()
             except Exception as e:
                 logger.warning("Deepgram run_forever error: %s", e)
             if not stop_event.is_set():
@@ -938,6 +947,7 @@ def handle_media_stream(ws):
     dg_thread.start()
 
     # Deepgram KeepAlive thread — sends {"type": "KeepAlive"} every 5s
+    # This is the APPLICATION-LEVEL keepalive that Deepgram requires (not WS pings)
     def deepgram_keepalive():
         while not stop_event.is_set():
             time.sleep(5)
@@ -945,6 +955,7 @@ def handle_media_stream(ws):
                 app = dg_app_container[0]
                 if app and app.sock and app.sock.connected:
                     app.send(json.dumps({"type": "KeepAlive"}))
+                    logger.debug("Deepgram KeepAlive sent")
             except Exception:
                 pass  # will reconnect via run_forever loop
 
@@ -1222,7 +1233,10 @@ def handle_media_stream(ws):
         transcript_thread.join(timeout=5.0)
         try:
             app = dg_app_container[0]
-            if app:
+            if app and app.sock and app.sock.connected:
+                # Send CloseStream to flush Deepgram buffer before closing
+                app.send(json.dumps({"type": "CloseStream"}))
+                time.sleep(0.5)
                 app.close()
         except Exception:
             pass
