@@ -959,6 +959,7 @@ def handle_media_stream(ws):
     # Flag to ignore input while AI is speaking
     is_speaking = threading.Event()
     speaking_ended_at = [0.0]  # timestamp when speaking ended (for echo cooldown)
+    audio_packet_count = [0]  # counter for audio packets sent to Deepgram
 
     # --- Helper: speak text via TTS -> Twilio ---
     def speak(text):
@@ -1173,13 +1174,15 @@ def handle_media_stream(ws):
                 # Forward raw mu-law audio to Deepgram
                 payload = data["media"]["payload"]
                 audio_bytes = base64.b64decode(payload)
+                audio_packet_count[0] += 1
+                if audio_packet_count[0] % 500 == 1:
+                    logger.info("Audio packets sent to Deepgram: %d", audio_packet_count[0])
                 try:
                     dg = dg_ws_container[0]
                     if dg:
-                        with dg_ws_lock:
-                            dg.send_binary(audio_bytes)
-                except Exception:
-                    logger.warning("Error sending audio to Deepgram")
+                        dg.send_binary(audio_bytes)
+                except Exception as e:
+                    logger.warning("Error sending audio to Deepgram: %s", e)
 
             elif event == "stop":
                 logger.info("Stream stopped")
