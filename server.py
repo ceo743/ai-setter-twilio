@@ -886,16 +886,20 @@ def handle_media_stream(ws):
     def deepgram_io_thread():
         """Single thread for ALL Deepgram I/O (send audio + receive transcripts).
         This avoids thread-safety issues with websocket-client."""
+        import select as _select
         while not stop_event.is_set():
             try:
                 dg = websocket.WebSocket()
-                dg.settimeout(0.05)  # 50ms timeout for non-blocking recv
                 dg.connect(dg_url, header=["Authorization: Token {}".format(DEEPGRAM_API_KEY)])
+                dg.settimeout(0)  # non-blocking AFTER connect
                 logger.info("Deepgram WebSocket connected")
                 dg_ready.set()
+                sock = dg.sock  # underlying socket for select()
+
+                total_sent = [0]
 
                 while not stop_event.is_set():
-                    # 1) Send all queued audio frames
+                    # 1) Send all queued audio frames immediately
                     sent = 0
                     while True:
                         try:
@@ -904,33 +908,37 @@ def handle_media_stream(ws):
                             sent += 1
                         except queue.Empty:
                             break
-                    if sent > 0 and sent % 500 < 10:
-                        logger.info("Deepgram: sent %d audio frames this batch", sent)
+                    total_sent[0] += sent
+                    if sent > 0 and total_sent[0] % 500 < sent:
+                        logger.info("Deepgram: total audio frames sent: %d", total_sent[0])
 
-                    # 2) Try to receive transcript results
-                    try:
-                        result_raw = dg.recv()
-                        if result_raw:
-                            result = json.loads(result_raw)
-                            msg_type = result.get("type", "unknown")
-                            if msg_type == "Results":
-                                is_final = result.get("is_final", False)
-                                transcript = (result.get("channel", {})
-                                              .get("alternatives", [{}])[0]
-                                              .get("transcript", ""))
-                                if is_final and transcript:
-                                    logger.info("Deepgram final transcript: %s", transcript)
-                                    transcript_q.put(transcript)
-                                elif is_final:
-                                    logger.debug("Deepgram final but empty transcript")
-                            elif msg_type == "Metadata":
-                                logger.info("Deepgram metadata: request_id=%s",
-                                            result.get("request_id", "N/A"))
-                            else:
-                                logger.info("Deepgram message type=%s", msg_type)
-                    except websocket.WebSocketTimeoutException:
-                        # Normal — no data ready, continue loop
-                        pass
+                    # 2) Check if Deepgram has data to read (non-blocking via select)
+                    readable, _, _ = _select.select([sock], [], [], 0.005)  # 5ms max wait
+                    if readable:
+                        try:
+                            result_raw = dg.recv()
+                            if result_raw:
+                                result = json.loads(result_raw)
+                                msg_type = result.get("type", "unknown")
+                                if msg_type == "Results":
+                                    is_final = result.get("is_final", False)
+                                    transcript = (result.get("channel", {})
+                                                  .get("alternatives", [{}])[0]
+                                                  .get("transcript", ""))
+                                    if is_final and transcript:
+                                        logger.info("Deepgram final transcript: %s", transcript)
+                                        transcript_q.put(transcript)
+                                elif msg_type == "Metadata":
+                                    logger.info("Deepgram metadata: request_id=%s",
+                                                result.get("request_id", "N/A"))
+                        except websocket.WebSocketTimeoutException:
+                            pass
+                        except Exception as recv_err:
+                            logger.warning("Deepgram recv error: %s", recv_err)
+                            break
+                    elif sent == 0:
+                        # Nothing to send, nothing to read — brief sleep to avoid CPU spin
+                        time.sleep(0.005)
 
                 dg.close()
             except Exception as e:
