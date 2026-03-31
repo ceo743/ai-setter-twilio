@@ -1063,6 +1063,13 @@ def handle_media_stream(ws):
                 speak(response_text)
                 last_activity = time.time()
 
+                # Auto-hangup after farewell
+                if "buona giornata" in response_text.lower():
+                    logger.info("HANGUP: Detected 'buona giornata' in response, closing call in 3s")
+                    time.sleep(3)
+                    stop_event.set()
+                    break
+
             except queue.Empty:
                 # Timeout -- check if there's buffered text
                 if buf:
@@ -1071,6 +1078,14 @@ def handle_media_stream(ws):
                     response_text = conversation.get_response(user_input)
                     speak(response_text)
                     last_activity = time.time()
+
+                    # Auto-hangup after farewell
+                    if "buona giornata" in response_text.lower():
+                        logger.info("HANGUP: Detected 'buona giornata' in response, closing call in 3s")
+                        time.sleep(3)
+                        stop_event.set()
+                        break
+
                     continue
 
                 # Silence timeout check (only after opening message)
