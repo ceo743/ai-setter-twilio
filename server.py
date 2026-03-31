@@ -873,66 +873,74 @@ def handle_media_stream(ws):
     stop_event = threading.Event()
 
     # --- Deepgram live transcription via raw WebSocket ---
+    # IMPORTANT: websocket-client's WebSocket class is NOT thread-safe.
+    # All send/recv MUST happen in a SINGLE thread to avoid data corruption.
     transcript_q = queue.Queue()
+    dg_audio_q = queue.Queue()  # audio frames to send to Deepgram
     dg_ready = threading.Event()
 
     dg_url = ("wss://api.deepgram.com/v1/listen"
               "?model=nova-2&language=it&encoding=mulaw&sample_rate=8000"
               "&channels=1&punctuate=true&interim_results=false&endpointing=300")
 
-    dg_ws_lock = threading.Lock()
-    dg_ws_container = [None]  # mutable container for reconnect
-
-    def connect_deepgram():
-        """Connect (or reconnect) to Deepgram WebSocket."""
-        new_ws = websocket.WebSocket()
-        new_ws.settimeout(10)  # 10s timeout to prevent hanging
-        new_ws.connect(dg_url, header=["Authorization: Token {}".format(DEEPGRAM_API_KEY)])
-        return new_ws
-
-    try:
-        dg_ws_container[0] = connect_deepgram()
-        logger.info("Deepgram WebSocket connected")
-        dg_ready.set()
-    except Exception:
-        logger.exception("Failed to connect to Deepgram")
-        ws.close()
-        return
-
-    # Background thread to read Deepgram results (with auto-reconnect)
-    def read_deepgram():
+    def deepgram_io_thread():
+        """Single thread for ALL Deepgram I/O (send audio + receive transcripts).
+        This avoids thread-safety issues with websocket-client."""
         while not stop_event.is_set():
             try:
-                dg = dg_ws_container[0]
-                if dg is None:
-                    time.sleep(0.5)
-                    continue
-                result_raw = dg.recv()
-                if not result_raw:
-                    continue
-                result = json.loads(result_raw)
-                if result.get("is_final"):
-                    transcript = result.get("channel", {}).get("alternatives", [{}])[0].get("transcript", "")
-                    if transcript:
-                        logger.info("Deepgram final transcript: %s", transcript)
-                        transcript_q.put(transcript)
-            except websocket.WebSocketTimeoutException:
-                # Timeout is normal — just means no speech detected, continue
-                continue
+                dg = websocket.WebSocket()
+                dg.settimeout(0.05)  # 50ms timeout for non-blocking recv
+                dg.connect(dg_url, header=["Authorization: Token {}".format(DEEPGRAM_API_KEY)])
+                logger.info("Deepgram WebSocket connected")
+                dg_ready.set()
+
+                while not stop_event.is_set():
+                    # 1) Send all queued audio frames
+                    sent = 0
+                    while True:
+                        try:
+                            audio = dg_audio_q.get_nowait()
+                            dg.send_binary(audio)
+                            sent += 1
+                        except queue.Empty:
+                            break
+                    if sent > 0 and sent % 500 < 10:
+                        logger.info("Deepgram: sent %d audio frames this batch", sent)
+
+                    # 2) Try to receive transcript results
+                    try:
+                        result_raw = dg.recv()
+                        if result_raw:
+                            result = json.loads(result_raw)
+                            msg_type = result.get("type", "unknown")
+                            if msg_type == "Results":
+                                is_final = result.get("is_final", False)
+                                transcript = (result.get("channel", {})
+                                              .get("alternatives", [{}])[0]
+                                              .get("transcript", ""))
+                                if is_final and transcript:
+                                    logger.info("Deepgram final transcript: %s", transcript)
+                                    transcript_q.put(transcript)
+                                elif is_final:
+                                    logger.debug("Deepgram final but empty transcript")
+                            elif msg_type == "Metadata":
+                                logger.info("Deepgram metadata: request_id=%s",
+                                            result.get("request_id", "N/A"))
+                            else:
+                                logger.info("Deepgram message type=%s", msg_type)
+                    except websocket.WebSocketTimeoutException:
+                        # Normal — no data ready, continue loop
+                        pass
+
+                dg.close()
             except Exception as e:
                 if stop_event.is_set():
-                    logger.info("Deepgram read ended (stop_event set)")
+                    logger.info("Deepgram IO thread ending (stop_event set)")
                     break
-                logger.warning("Deepgram read error, reconnecting: %s", e)
-                try:
-                    with dg_ws_lock:
-                        dg_ws_container[0] = connect_deepgram()
-                    logger.info("Deepgram reconnected successfully")
-                except Exception:
-                    logger.exception("Deepgram reconnect failed")
-                    time.sleep(1)
+                logger.warning("Deepgram IO error, reconnecting in 1s: %s", e)
+                time.sleep(1)
 
-    dg_thread = threading.Thread(target=read_deepgram, daemon=True)
+    dg_thread = threading.Thread(target=deepgram_io_thread, daemon=True)
     dg_thread.start()
 
     # Lock for sending on the websocket (flask-sock ws is not thread-safe)
@@ -1171,18 +1179,13 @@ def handle_media_stream(ws):
                     threading.Thread(target=speak, args=(opening,), daemon=True).start()
 
             elif event == "media":
-                # Forward raw mu-law audio to Deepgram
+                # Forward raw mu-law audio to Deepgram via thread-safe queue
                 payload = data["media"]["payload"]
                 audio_bytes = base64.b64decode(payload)
                 audio_packet_count[0] += 1
                 if audio_packet_count[0] % 500 == 1:
-                    logger.info("Audio packets sent to Deepgram: %d", audio_packet_count[0])
-                try:
-                    dg = dg_ws_container[0]
-                    if dg:
-                        dg.send_binary(audio_bytes)
-                except Exception as e:
-                    logger.warning("Error sending audio to Deepgram: %s", e)
+                    logger.info("Audio packets queued for Deepgram: %d", audio_packet_count[0])
+                dg_audio_q.put(audio_bytes)
 
             elif event == "stop":
                 logger.info("Stream stopped")
@@ -1193,12 +1196,7 @@ def handle_media_stream(ws):
     finally:
         stop_event.set()
         transcript_thread.join(timeout=5.0)
-        try:
-            dg = dg_ws_container[0]
-            if dg:
-                dg.close()
-        except Exception:
-            pass
+        dg_thread.join(timeout=3.0)
 
         # Save call to history and notify Davide
         if conversation and lead_data:
