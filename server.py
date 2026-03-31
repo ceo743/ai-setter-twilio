@@ -1242,9 +1242,9 @@ def handle_media_stream(ws):
             if qualified and phone:
                 schedule_reminder(phone, lead_data)
 
-            # Notify Davide via SMS with summary + transcript
+            # Notify Davide via WhatsApp with summary + transcript
             if transcript_text:
-                summary = "CALL COMPLETATA\n{} {} - {}\nRuolo: {}\nObiettivo: {}\nEsito: {}\n\nTrascrizione:\n{}".format(
+                summary = "📞 CALL COMPLETATA\n{} {} - {}\nRuolo: {}\nObiettivo: {}\nEsito: {}\n\nTrascrizione:\n{}".format(
                     entry["nome"], entry["cognome"], entry["phone"],
                     entry["ruolo"] or "N/A",
                     entry["obiettivi"] or "N/A",
@@ -1254,13 +1254,12 @@ def handle_media_stream(ws):
                 def notify_davide():
                     try:
                         client = TwilioClient(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
-                        # Send via SMS (more reliable than WhatsApp)
                         client.messages.create(
-                            to=DAVIDE_PHONE,
-                            from_=TWILIO_PHONE_NUMBER,
+                            to="whatsapp:{}".format(DAVIDE_PHONE),
+                            from_="whatsapp:{}".format(TWILIO_WHATSAPP_NUMBER),
                             body=summary[:1600],
                         )
-                        logger.info("Notifica SMS a Davide inviata")
+                        logger.info("Notifica WhatsApp a Davide inviata")
                     except Exception:
                         logger.exception("Errore notifica Davide")
                 threading.Thread(target=notify_davide, daemon=True).start()
