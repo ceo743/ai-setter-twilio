@@ -1199,10 +1199,15 @@ def handle_media_stream(ws):
                 audio_packet_count[0] += 1
                 if audio_packet_count[0] % 500 == 1:
                     logger.info("Audio packets sent to Deepgram: %d", audio_packet_count[0])
+                # CRITICAL: guard empty bytes (causes Deepgram to close)
+                if len(audio_bytes) == 0:
+                    continue
                 try:
                     app = dg_app_container[0]
                     if app and app.sock and app.sock.connected:
                         app.send(audio_bytes, opcode=websocket.ABNF.OPCODE_BINARY)
+                    else:
+                        logger.warning("Deepgram socket not connected, dropping audio packet %d", audio_packet_count[0])
                 except Exception as e:
                     logger.warning("Error sending audio to Deepgram: %s", e)
 
