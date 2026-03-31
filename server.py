@@ -13,11 +13,10 @@ import json
 import logging
 import os
 import queue
-import smtplib
 import threading
 import time
+import uuid
 from datetime import datetime, timedelta
-from email.mime.text import MIMEText
 from typing import Optional
 
 import httpx
@@ -46,8 +45,6 @@ GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 ELEVENLABS_API_KEY = os.getenv("ELEVENLABS_API_KEY")
 ELEVENLABS_VOICE_ID = os.getenv("ELEVENLABS_VOICE_ID")
 DEEPGRAM_API_KEY = os.getenv("DEEPGRAM_API_KEY")
-DAVIDE_EMAIL = os.getenv("DAVIDE_EMAIL", "davide@mygovernance.it")
-GMAIL_APP_PASSWORD = os.getenv("GMAIL_APP_PASSWORD", "")
 PUBLIC_URL = os.getenv("PUBLIC_URL", "")
 
 # Fix: if PUBLIC_URL is empty or points to dead serveo tunnel, clear it
@@ -87,47 +84,29 @@ logging.basicConfig(
 logger = logging.getLogger("setter-agent")
 
 # ---------------------------------------------------------------------------
-# Email report post-call
+# Transcript storage (in-memory, accessible via /transcript/<id>)
 # ---------------------------------------------------------------------------
-def send_email_report(entry, transcript_text):
-    """Send post-call email report to Davide via Gmail SMTP."""
-    if not GMAIL_APP_PASSWORD:
-        logger.warning("GMAIL_APP_PASSWORD not set, skipping email report")
-        return
+transcripts_store = {}
+
+
+def save_transcript(entry, transcript_text):
+    """Save transcript and return its public URL."""
+    tid = uuid.uuid4().hex[:10]
     esito = "Confermato" if entry["status"] == "qualificato" else "Non Confermato"
-    nome = entry.get("nome", "N/A")
-    cognome = entry.get("cognome", "N/A")
-    ruolo = entry.get("ruolo", "N/A")
-    subject = "TWILIO_{}_{}_{}_{}".format(esito, nome, cognome, ruolo)
-    body = (
-        "REPORT CHIAMATA AI SETTER\n"
-        "========================\n\n"
-        "Nome: {} {}\n"
-        "Telefono: {}\n"
-        "Ruolo: {}\n"
-        "Obiettivo: {}\n"
-        "Esito: {}\n"
-        "Data consulenza: {}\n"
-        "Timestamp: {}\n\n"
-        "TRASCRIZIONE COMPLETA\n"
-        "---------------------\n{}"
-    ).format(
-        nome, cognome, entry.get("phone", "N/A"),
-        ruolo, entry.get("obiettivi", "N/A"),
-        esito, entry.get("data_consulenza", "N/A"),
-        entry.get("timestamp", ""), transcript_text
-    )
-    try:
-        msg = MIMEText(body, "plain", "utf-8")
-        msg["Subject"] = subject
-        msg["From"] = DAVIDE_EMAIL
-        msg["To"] = DAVIDE_EMAIL
-        with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
-            server.login(DAVIDE_EMAIL, GMAIL_APP_PASSWORD)
-            server.send_message(msg)
-        logger.info("Email report inviata a %s", DAVIDE_EMAIL)
-    except Exception:
-        logger.exception("Errore invio email report")
+    transcripts_store[tid] = {
+        "nome": entry.get("nome", "N/A"),
+        "cognome": entry.get("cognome", "N/A"),
+        "phone": entry.get("phone", "N/A"),
+        "ruolo": entry.get("ruolo", "N/A"),
+        "obiettivi": entry.get("obiettivi", "N/A"),
+        "esito": esito,
+        "data_consulenza": entry.get("data_consulenza", "N/A"),
+        "timestamp": entry.get("timestamp", ""),
+        "transcript": transcript_text,
+    }
+    url = "{}/transcript/{}".format(PUBLIC_URL, tid)
+    logger.info("Transcript saved: %s", url)
+    return url
 
 
 # ---------------------------------------------------------------------------
@@ -731,6 +710,33 @@ def whatsapp_incoming():
     return {"status": "ok"}
 
 
+@app.route("/transcript/<tid>", methods=["GET"])
+def view_transcript(tid):
+    """View full transcript of a call."""
+    data = transcripts_store.get(tid)
+    if not data:
+        return "Trascrizione non trovata", 404
+    return """<!DOCTYPE html>
+<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Trascrizione - {nome} {cognome}</title>
+<style>body{{font-family:sans-serif;max-width:700px;margin:20px auto;padding:0 15px;background:#f5f5f5}}
+.card{{background:#fff;border-radius:8px;padding:20px;margin-bottom:15px;box-shadow:0 1px 3px rgba(0,0,0,.1)}}
+.esito{{display:inline-block;padding:4px 12px;border-radius:4px;color:#fff;font-weight:bold}}
+.confermato{{background:#4CAF50}}.non-confermato{{background:#f44336}}
+pre{{white-space:pre-wrap;word-wrap:break-word;background:#f9f9f9;padding:15px;border-radius:6px;font-size:14px;line-height:1.6}}</style></head>
+<body><div class="card"><h2>{nome} {cognome}</h2>
+<p><span class="esito {esito_class}">{esito}</span></p>
+<p><b>Telefono:</b> {phone}<br><b>Ruolo:</b> {ruolo}<br><b>Obiettivo:</b> {obiettivi}<br>
+<b>Data consulenza:</b> {data_consulenza}<br><b>Chiamata:</b> {timestamp}</p></div>
+<div class="card"><h3>Trascrizione completa</h3><pre>{transcript}</pre></div></body></html>""".format(
+        nome=data["nome"], cognome=data["cognome"], phone=data["phone"],
+        ruolo=data["ruolo"], obiettivi=data["obiettivi"], esito=data["esito"],
+        esito_class="confermato" if data["esito"] == "Confermato" else "non-confermato",
+        data_consulenza=data["data_consulenza"], timestamp=data["timestamp"],
+        transcript=data["transcript"].replace("<", "&lt;").replace(">", "&gt;"),
+    )
+
+
 @app.route("/health", methods=["GET"])
 def health():
     return {"status": "ok"}
@@ -1313,14 +1319,15 @@ def handle_media_stream(ws):
             if qualified and phone:
                 schedule_reminder(phone, lead_data)
 
-            # Notify Davide via WhatsApp with summary + transcript
+            # Save transcript and notify Davide via WhatsApp with link
             if transcript_text:
-                summary = "📞 CALL COMPLETATA\n{} {} - {}\nRuolo: {}\nObiettivo: {}\nEsito: {}\n\nTrascrizione:\n{}".format(
+                transcript_url = save_transcript(entry, transcript_text)
+                esito = "Confermato" if entry["status"] == "qualificato" else "Non Confermato"
+                summary = "📞 CALL COMPLETATA\n{} {} - {}\nRuolo: {}\nEsito: {}\n\n📄 Trascrizione completa:\n{}".format(
                     entry["nome"], entry["cognome"], entry["phone"],
                     entry["ruolo"] or "N/A",
-                    entry["obiettivi"] or "N/A",
-                    entry["status"].upper(),
-                    transcript_text[:1400]
+                    esito,
+                    transcript_url,
                 )
                 def notify_davide():
                     try:
@@ -1334,11 +1341,6 @@ def handle_media_stream(ws):
                     except Exception:
                         logger.exception("Errore notifica Davide")
                 threading.Thread(target=notify_davide, daemon=True).start()
-
-            # Send full email report (transcript not truncated)
-            def email_report():
-                send_email_report(entry, transcript_text)
-            threading.Thread(target=email_report, daemon=True).start()
 
         logger.info("Media stream handler finished")
 
