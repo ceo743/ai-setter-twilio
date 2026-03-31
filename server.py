@@ -2,7 +2,7 @@
 Twilio AI Setter Voice Agent
 -----------------------------
 Flask + flask-sock server that orchestrates:
-  Twilio Media Stream  ->  Deepgram STT  ->  Claude Haiku 4.5  ->  ElevenLabs Turbo TTS  ->  Twilio
+  Twilio Media Stream  ->  Deepgram STT  ->  Groq LLaMA 3  ->  ElevenLabs Turbo TTS  ->  Twilio
 
 Everything runs on a single port so a single tunnel (serveo.net) works.
 """
@@ -18,7 +18,6 @@ import time
 from datetime import datetime, timedelta
 from typing import Optional
 
-import anthropic
 import httpx
 import websocket  # websocket-client for Deepgram raw WS
 from dotenv import load_dotenv
@@ -41,6 +40,7 @@ TWILIO_AUTH_TOKEN = os.getenv("TWILIO_AUTH_TOKEN")
 TWILIO_PHONE_NUMBER = os.getenv("TWILIO_PHONE_NUMBER")
 MY_PHONE_NUMBER = os.getenv("MY_PHONE_NUMBER")
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
+GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 ELEVENLABS_API_KEY = os.getenv("ELEVENLABS_API_KEY")
 ELEVENLABS_VOICE_ID = os.getenv("ELEVENLABS_VOICE_ID")
 DEEPGRAM_API_KEY = os.getenv("DEEPGRAM_API_KEY")
@@ -61,7 +61,7 @@ SERVER_PORT = int(os.getenv("PORT", os.getenv("SERVER_PORT", "8080")))
 OPENING_MESSAGE = "Ciao Alessandro, sono Stefania del team LinkedIn di Davide Caiazzo."
 
 # Validate critical keys at startup
-for _key_name in ["ANTHROPIC_API_KEY", "ELEVENLABS_API_KEY", "DEEPGRAM_API_KEY", "TWILIO_ACCOUNT_SID"]:
+for _key_name in ["GROQ_API_KEY", "ELEVENLABS_API_KEY", "DEEPGRAM_API_KEY", "TWILIO_ACCOUNT_SID"]:
     _val = os.getenv(_key_name)
     if not _val:
         raise RuntimeError("Missing env var: {}".format(_key_name))
@@ -112,23 +112,25 @@ def scrape_website(url: str) -> str:
         if len(text) < 50:
             return ""
 
-        # Use Claude to extract a brief summary
-        client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
-        summary_resp = client.messages.create(
-            model="claude-haiku-4-5-20251001",
-            max_tokens=200,
-            messages=[{
-                "role": "user",
-                "content": (
+        # Use Groq LLaMA to extract a brief summary
+        groq_resp = httpx.post(
+            "https://api.groq.com/openai/v1/chat/completions",
+            headers={"Authorization": "Bearer {}".format(GROQ_API_KEY), "Content-Type": "application/json"},
+            json={
+                "model": "llama-3.3-70b-versatile",
+                "max_tokens": 200,
+                "messages": [{"role": "user", "content": (
                     "Analizza questo testo dal sito web di un'azienda e rispondi in italiano con MAX 3 righe:\n"
                     "1. Di cosa si occupa l'azienda (settore e servizi principali)\n"
                     "2. Se vende a privati (B2C) o ad aziende (B2B)\n"
                     "3. Zona geografica se menzionata\n\n"
                     "Testo dal sito:\n" + text
-                ),
-            }],
+                )}],
+            },
+            timeout=15.0,
         )
-        summary = summary_resp.content[0].text.strip()
+        groq_resp.raise_for_status()
+        summary = groq_resp.json()["choices"][0]["message"]["content"].strip()
         logger.info("Website summary for %s: %s", url, summary)
         return summary
     except Exception as e:
@@ -803,14 +805,13 @@ def elevenlabs_tts_stream_sync(text):
 
 
 # ---------------------------------------------------------------------------
-# Claude conversation  -- synchronous version
+# Groq LLaMA conversation  -- synchronous version
 # ---------------------------------------------------------------------------
 
 class ConversationManager:
-    """Maintains conversation history and queries Claude Haiku."""
+    """Maintains conversation history and queries Groq LLaMA 3."""
 
     def __init__(self, system_prompt):
-        self.client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
         # Force Italian language in system prompt
         self.system_prompt = system_prompt + "\n\nREGOLA ASSOLUTA: Rispondi SEMPRE e SOLO in italiano. MAI una parola in inglese."
         self.messages = []
@@ -822,19 +823,26 @@ class ConversationManager:
         logger.info("User said: %s", user_text)
 
         try:
-            response = self.client.messages.create(
-                model="claude-haiku-4-5-20251001",
-                max_tokens=150,
-                system=self.system_prompt,
-                messages=self.messages,
+            groq_messages = [{"role": "system", "content": self.system_prompt}] + self.messages
+            resp = httpx.post(
+                "https://api.groq.com/openai/v1/chat/completions",
+                headers={"Authorization": "Bearer {}".format(GROQ_API_KEY), "Content-Type": "application/json"},
+                json={
+                    "model": "llama-3.3-70b-versatile",
+                    "max_tokens": 150,
+                    "temperature": 0.7,
+                    "messages": groq_messages,
+                },
+                timeout=10.0,
             )
-            assistant_text = response.content[0].text.strip()
+            resp.raise_for_status()
+            assistant_text = resp.json()["choices"][0]["message"]["content"].strip()
             self.messages.append({"role": "assistant", "content": assistant_text})
             self.transcript_log.append(("Stefania", assistant_text))
             logger.info("Stefania says: %s", assistant_text)
             return assistant_text
         except Exception:
-            logger.exception("Claude API error")
+            logger.exception("Groq API error")
             return "Mi scusi, ho avuto un problema tecnico. Puo' ripetere?"
 
 
