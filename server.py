@@ -29,6 +29,7 @@ from twilio.rest import Client as TwilioClient
 from twilio.twiml.voice_response import Connect, VoiceResponse
 
 from knowledge_base import get_knowledge_prompt
+import re
 
 # ---------------------------------------------------------------------------
 # Configuration
@@ -81,6 +82,59 @@ logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
 )
 logger = logging.getLogger("setter-agent")
+
+# ---------------------------------------------------------------------------
+# Website scraping for lead intelligence
+# ---------------------------------------------------------------------------
+def scrape_website(url: str) -> str:
+    """Scrape a prospect's website to extract business info before calling.
+    Returns a short summary or empty string on failure."""
+    if not url or url.strip() in ("", "-", "n/a", "nessuno", "no"):
+        return ""
+    url = url.strip()
+    if not url.startswith("http"):
+        url = "https://" + url
+    try:
+        logger.info("Scraping website: %s", url)
+        resp = httpx.get(url, timeout=8, follow_redirects=True, headers={
+            "User-Agent": "Mozilla/5.0 (compatible; DCBot/1.0)"
+        })
+        if resp.status_code != 200:
+            logger.warning("Website returned %s for %s", resp.status_code, url)
+            return ""
+        html = resp.text[:15000]  # limit to first 15k chars
+        # Strip HTML tags to get text
+        text = re.sub(r'<script[^>]*>.*?</script>', '', html, flags=re.DOTALL | re.IGNORECASE)
+        text = re.sub(r'<style[^>]*>.*?</style>', '', text, flags=re.DOTALL | re.IGNORECASE)
+        text = re.sub(r'<[^>]+>', ' ', text)
+        text = re.sub(r'\s+', ' ', text).strip()
+        text = text[:3000]  # limit text for Claude
+
+        if len(text) < 50:
+            return ""
+
+        # Use Claude to extract a brief summary
+        client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
+        summary_resp = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=200,
+            messages=[{
+                "role": "user",
+                "content": (
+                    "Analizza questo testo dal sito web di un'azienda e rispondi in italiano con MAX 3 righe:\n"
+                    "1. Di cosa si occupa l'azienda (settore e servizi principali)\n"
+                    "2. Se vende a privati (B2C) o ad aziende (B2B)\n"
+                    "3. Zona geografica se menzionata\n\n"
+                    "Testo dal sito:\n" + text
+                ),
+            }],
+        )
+        summary = summary_resp.content[0].text.strip()
+        logger.info("Website summary for %s: %s", url, summary)
+        return summary
+    except Exception as e:
+        logger.warning("Failed to scrape %s: %s", url, e)
+        return ""
 
 # ---------------------------------------------------------------------------
 # Flask app + flask-sock
@@ -329,6 +383,14 @@ def make_call():
         "data_consulenza": data.get("data_consulenza", ""),
         "ora_consulenza": data.get("ora_consulenza", ""),
     }
+
+    # Scrape website before calling to gather business intelligence
+    sito = lead_data.get("sito_web", "")
+    if sito:
+        website_info = scrape_website(sito)
+        if website_info:
+            lead_data["website_info"] = website_info
+            logger.info("Website intelligence gathered for %s: %s", sito, website_info[:200])
 
     if PUBLIC_URL:
         public_url = PUBLIC_URL.rstrip("/")
@@ -1083,6 +1145,12 @@ def handle_media_stream(ws):
                     prompt += "\n- Sito web: {}".format(lead_data.get("sito_web", ""))
                     prompt += "\n- Fatturato azienda: {}".format(lead_data.get("fatturato", ""))
                     prompt += "\n- Budget disponibile: {}".format(lead_data.get("budget", ""))
+                    # Add website intelligence if available
+                    website_info = lead_data.get("website_info", "")
+                    if website_info:
+                        prompt += "\n\n## INFO DAL SITO WEB DEL PROSPECT (hai gia' analizzato il loro sito)"
+                        prompt += "\n{}".format(website_info)
+                        prompt += "\nUSA queste info per dimostrare che ti sei preparata. Di': 'Ho dato un'occhiata al vostro sito e ho visto che vi occupate di...' NON chiedere di cosa si occupa se lo sai gia'."
                     prompt += "\n\nUSA QUESTE INFO per personalizzare la call. NON chiedere cose che sai gia'."
                     prompt += "\nRiferisciti a quello che ha scritto nel form per creare rapport."
 
