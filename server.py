@@ -951,7 +951,8 @@ def handle_media_stream(ws):
 
     # Flag to ignore input while AI is speaking
     is_speaking = threading.Event()
-    speaking_ended_at = [0.0]  # timestamp when speaking ended (for echo cooldown)
+    speaking_ended_at = [0.0]  # estimated timestamp when audio FINISHES PLAYING (not sending)
+    playback_end_estimate = [0.0]  # when Twilio finishes playing audio (for silence timer)
     audio_packet_count = [0]  # counter for audio packets sent to Deepgram
 
     # --- Helper: speak text via TTS -> Twilio ---
@@ -965,6 +966,8 @@ def handle_media_stream(ws):
                 transcript_q.get_nowait()
             except queue.Empty:
                 break
+        total_audio_bytes = 0
+        speak_start = time.time()
         try:
             chunk_count = 0
             for chunk in elevenlabs_tts_stream_sync(text):
@@ -972,13 +975,22 @@ def handle_media_stream(ws):
                     logger.info("TTS interrupted by stop_event after %d chunks", chunk_count)
                     break
                 send_audio_to_twilio(chunk)
+                total_audio_bytes += len(chunk)
                 chunk_count += 1
-            logger.info("TTS finished: %d chunks sent for: %s", chunk_count, text[:50])
+            logger.info("TTS finished: %d chunks, %d bytes for: %s", chunk_count, total_audio_bytes, text[:50])
         except Exception:
             logger.exception("TTS streaming error")
         finally:
             is_speaking.clear()
-            speaking_ended_at[0] = time.time()
+            # Estimate when audio finishes PLAYING on the phone
+            # mulaw 8000Hz = 8000 bytes/sec
+            streaming_elapsed = time.time() - speak_start
+            playback_duration = total_audio_bytes / 8000.0
+            remaining_playback = max(0, playback_duration - streaming_elapsed)
+            estimated_end = time.time() + remaining_playback
+            speaking_ended_at[0] = estimated_end
+            playback_end_estimate[0] = estimated_end
+            logger.info("TTS playback estimate: %.1fs total, %.1fs remaining", playback_duration, remaining_playback)
             # Drain transcripts that came in while speaking (echo/feedback)
             while not transcript_q.empty():
                 try:
@@ -1012,9 +1024,11 @@ def handle_media_stream(ws):
                     logger.info("Ignoring input while speaking: %s", text)
                     continue
 
-                # Ignore echo in the 0.8s after speaking ends
-                if time.time() - speaking_ended_at[0] < 0.8:
-                    logger.info("Ignoring echo after speaking: %s", text)
+                # Ignore echo while audio is still playing + 0.3s cooldown
+                # speaking_ended_at is estimated playback END time, not chunk-send time
+                time_since_playback_end = time.time() - speaking_ended_at[0]
+                if time_since_playback_end < 0.3:
+                    logger.info("Ignoring echo (%.2fs since playback end): %s", time_since_playback_end, text)
                     continue
 
                 if buf:
@@ -1053,7 +1067,10 @@ def handle_media_stream(ws):
 
                 # Silence timeout check (only after opening message)
                 if conversation and not is_speaking.is_set():
-                    silence_duration = time.time() - last_activity
+                    # Use the LATER of last_activity and playback_end_estimate
+                    # so silence timer doesn't fire while audio is still playing
+                    silence_start = max(last_activity, playback_end_estimate[0])
+                    silence_duration = time.time() - silence_start
 
                     if silence_duration >= SILENCE_HANGUP_SECS and silence_warning_sent:
                         # Too long silence after warning - hang up
