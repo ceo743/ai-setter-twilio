@@ -189,36 +189,50 @@ Se NON QUALIFICATO:
 """
 
 def _format_time_spoken(time_str):
-    """Converte '15:00' -> 'alle quindici', '10:30' -> 'alle dieci e trenta'."""
+    """Converte orario in italiano parlato naturale (12h).
+    '15:00' -> 'alle tre del pomeriggio'
+    '15:30' -> 'alle tre e mezza del pomeriggio'
+    '10:00' -> 'alle dieci di mattina'
+    """
     if not time_str:
         return ""
     try:
-        # Handle formats: "15:00", "15.00", "15"
         time_str = time_str.strip().replace(".", ":")
         parts = time_str.split(":")
         hour = int(parts[0])
         minute = int(parts[1]) if len(parts) > 1 else 0
 
+        # Fascia oraria
+        if 5 <= hour < 12:
+            fascia = "di mattina"
+        elif 12 <= hour < 18:
+            fascia = "del pomeriggio"
+        else:
+            fascia = "di sera"
+
+        # Converti a 12h
+        h12 = hour if hour <= 12 else hour - 12
+        if h12 == 0:
+            h12 = 12
+
         ore_parole = {
-            0: "mezzanotte", 1: "una", 2: "due", 3: "tre", 4: "quattro",
-            5: "cinque", 6: "sei", 7: "sette", 8: "otto", 9: "nove",
-            10: "dieci", 11: "undici", 12: "dodici", 13: "tredici",
-            14: "quattordici", 15: "quindici", 16: "sedici", 17: "diciassette",
-            18: "diciotto", 19: "diciannove", 20: "venti", 21: "ventuno",
-            22: "ventidue", 23: "ventitré",
+            1: "una", 2: "due", 3: "tre", 4: "quattro", 5: "cinque",
+            6: "sei", 7: "sette", 8: "otto", 9: "nove", 10: "dieci",
+            11: "undici", 12: "dodici",
         }
-        minuti_parole = {
-            0: "", 5: "e cinque", 10: "e dieci", 15: "e un quarto",
-            20: "e venti", 25: "e venticinque", 30: "e trenta",
-            35: "e trentacinque", 40: "e quaranta", 45: "e quarantacinque",
-            50: "e cinquanta", 55: "e cinquantacinque",
-        }
-        h_text = ore_parole.get(hour, str(hour))
-        m_text = minuti_parole.get(minute, "e {}".format(minute))
-        result = "alle {}".format(h_text)
-        if m_text:
-            result += " {}".format(m_text)
-        return result
+        h_text = ore_parole.get(h12, str(h12))
+
+        # Minuti in italiano parlato
+        if minute == 0:
+            return "alle {} {}".format(h_text, fascia)
+        elif minute == 30:
+            return "alle {} e mezza {}".format(h_text, fascia)
+        elif minute == 15:
+            return "alle {} e un quarto {}".format(h_text, fascia)
+        elif minute == 45:
+            return "alle {} e quarantacinque {}".format(h_text, fascia)
+        else:
+            return "alle {} e {} {}".format(h_text, minute, fascia)
     except Exception:
         return "alle {}".format(time_str)
 

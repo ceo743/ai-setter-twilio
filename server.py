@@ -826,7 +826,8 @@ class ConversationManager:
 
     def __init__(self, system_prompt):
         self.client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
-        self.system_prompt = system_prompt
+        # Force Italian language in system prompt
+        self.system_prompt = system_prompt + "\n\nREGOLA ASSOLUTA: Rispondi SEMPRE e SOLO in italiano. MAI una parola in inglese."
         self.messages = []
         self.transcript_log = []  # [(role, text), ...]
 
@@ -838,7 +839,7 @@ class ConversationManager:
         try:
             response = self.client.messages.create(
                 model="claude-haiku-4-5-20251001",
-                max_tokens=80,
+                max_tokens=150,
                 system=self.system_prompt,
                 messages=self.messages,
             )
