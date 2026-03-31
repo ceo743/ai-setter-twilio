@@ -8,7 +8,6 @@ Everything runs on a single port so a single tunnel (serveo.net) works.
 """
 
 import asyncio
-import audioop
 import base64
 import json
 import logging
@@ -771,20 +770,6 @@ def dashboard():
         empty='<p style="text-align:center;color:#888;margin-top:40px">Nessuna chiamata ancora</p>' if not rows else ""
     )
     return Response(html, mimetype="text/html")
-
-
-# ---------------------------------------------------------------------------
-# Audio helpers
-# ---------------------------------------------------------------------------
-
-def pcm16_to_mulaw(pcm_bytes):
-    """Convert 16-bit signed PCM to G.711 mu-law."""
-    return audioop.lin2ulaw(pcm_bytes, 2)
-
-
-def mulaw_to_pcm16(mulaw_bytes):
-    """Convert G.711 mu-law to 16-bit signed PCM."""
-    return audioop.ulaw2lin(mulaw_bytes, 2)
 
 
 # ---------------------------------------------------------------------------
