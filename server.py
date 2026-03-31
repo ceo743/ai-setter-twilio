@@ -1087,12 +1087,9 @@ def handle_media_stream(ws):
                     logger.info("Ignoring input while speaking: %s", text)
                     continue
 
-                # Ignore echo while audio is still playing + 0.3s cooldown
-                # speaking_ended_at is estimated playback END time, not chunk-send time
+                # Log playback timing for debugging but don't filter
                 time_since_playback_end = time.time() - speaking_ended_at[0]
-                if time_since_playback_end < 0.1:
-                    logger.info("Ignoring echo (%.2fs since playback end): %s", time_since_playback_end, text)
-                    continue
+                logger.info("Transcript received (%.2fs since playback end): %s", time_since_playback_end, text)
 
                 if buf:
                     buf = "{} {}".format(buf, text)
