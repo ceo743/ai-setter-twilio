@@ -1305,10 +1305,8 @@ def handle_media_stream(ws):
                     threading.Thread(target=_mark_clear, daemon=True).start()
 
             elif event == "media":
-                # LAYER 1: Gate audio to Deepgram — don't send while AI is speaking
-                if is_speaking.is_set():
-                    continue  # Drop inbound audio — prevents echo reaching STT
-
+                # ALWAYS forward audio to Deepgram (gating breaks the STT connection)
+                # Echo is handled by discarding TRANSCRIPTS while is_speaking, not audio
                 payload = data["media"]["payload"]
                 audio_bytes = base64.b64decode(payload)
                 audio_packet_count[0] += 1
