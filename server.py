@@ -1224,8 +1224,11 @@ def handle_media_stream(ws):
             threading.Thread(target=_fallback_clear, daemon=True).start()
 
     # --- Background thread: process transcripts ---
+    prefilter_rejection = None  # Initialized here, set in "start" event handler
+
     def process_transcripts():
         """Read final transcripts, get Claude response, speak it."""
+        nonlocal prefilter_rejection
         pending_while_speaking = []  # Accumulate user speech during AI playback
         last_activity = time.time()
         silence_warning_sent = False
