@@ -27,7 +27,7 @@ from flask_sock import Sock
 from twilio.rest import Client as TwilioClient
 from twilio.twiml.voice_response import Connect, VoiceResponse
 
-from knowledge_base import get_knowledge_prompt
+from knowledge_base import get_knowledge_prompt, check_lead_prefilter
 from setter_prompt import get_setter_prompt
 import re
 
@@ -777,6 +777,12 @@ def test_response():
         prompt += "\n- Fatturato azienda: {}".format(data.get("fatturato", ""))
         prompt += "\n- Budget disponibile: {}".format(data.get("budget", ""))
 
+    # --- PRE-FILTRO PYTHON: B2C puro e cerca-lavoro ---
+    rejection_msg = check_lead_prefilter(
+        ruolo=ruolo,
+        obiettivi=data.get("obiettivi_linkedin", ""),
+    )
+
     conv = ConversationManager(prompt)
 
     # Support single message or conversation
@@ -791,8 +797,27 @@ def test_response():
         ]
 
     responses = []
+    opening_done = False
+    rejected = False
+
     for msg in messages:
         if msg["role"] == "user":
+            if rejected:
+                # Call already closed, skip
+                continue
+
+            if rejection_msg and opening_done:
+                # After opening, serve rejection message instead of LLM
+                responses.append({
+                    "user": msg["content"],
+                    "stefania": rejection_msg,
+                    "word_count": len(rejection_msg.split()),
+                    "ok": True,
+                    "prefilter": "rejected",
+                })
+                rejected = True
+                continue
+
             resp = conv.get_response(msg["content"])
             word_count = len(resp.split())
             responses.append({
@@ -801,6 +826,7 @@ def test_response():
                 "word_count": word_count,
                 "ok": word_count <= 15,
             })
+            opening_done = True
         elif msg["role"] == "assistant":
             # Inject assistant message into history
             conv.messages.append({"role": "assistant", "content": msg["content"]})
@@ -810,6 +836,7 @@ def test_response():
         "total_turns": len(responses),
         "prompt_used": "knowledge_base",
         "form_data": bool(ruolo),
+        "prefilter_rejection": bool(rejection_msg),
     })
 
 
@@ -1249,13 +1276,19 @@ def handle_media_stream(ws):
                 if not user_input:
                     continue
 
-                response_text = conversation.get_response(user_input)
+                # Pre-filter: serve rejection on second turn (after opening)
+                if prefilter_rejection and conversation and len(conversation.messages) >= 1:
+                    logger.info("PRE-FILTER: Serving rejection message to B2C/job-seeker lead")
+                    response_text = prefilter_rejection
+                    prefilter_rejection = None  # Only serve once
+                else:
+                    response_text = conversation.get_response(user_input)
                 speak(response_text)
                 last_activity = time.time()
 
                 # Auto-hangup after farewell
-                if "buona giornata" in response_text.lower() or "buona serata" in response_text.lower():
-                    logger.info("HANGUP: Detected 'buona giornata' in response, closing call in 3s")
+                if "buona giornata" in response_text.lower() or "buona serata" in response_text.lower() or "in bocca al lupo" in response_text.lower():
+                    logger.info("HANGUP: Detected farewell in response, closing call in 3s")
                     time.sleep(3)
                     stop_event.set()
                     break
@@ -1267,12 +1300,18 @@ def handle_media_stream(ws):
                     pending_while_speaking.clear()
                     if user_input:
                         logger.info("Processing pending input after speaking ended: %s", user_input)
-                        response_text = conversation.get_response(user_input)
+                        # Pre-filter check here too
+                        if prefilter_rejection and len(conversation.messages) >= 1:
+                            logger.info("PRE-FILTER (pending): Serving rejection message")
+                            response_text = prefilter_rejection
+                            prefilter_rejection = None
+                        else:
+                            response_text = conversation.get_response(user_input)
                         speak(response_text)
                         last_activity = time.time()
 
-                        if "buona giornata" in response_text.lower() or "buona serata" in response_text.lower():
-                            logger.info("HANGUP: Detected 'buona giornata' in response, closing call in 3s")
+                        if "buona giornata" in response_text.lower() or "buona serata" in response_text.lower() or "in bocca al lupo" in response_text.lower():
+                            logger.info("HANGUP: Detected farewell in response, closing call in 3s")
                             time.sleep(3)
                             stop_event.set()
                             break
@@ -1379,6 +1418,16 @@ def handle_media_stream(ws):
                     prompt += "\nRiferisciti a quello che ha scritto nel form per creare rapport."
 
                 conversation = ConversationManager(prompt)
+
+                # Pre-filter B2C/job-seeker at Python level
+                prefilter_rejection = check_lead_prefilter(
+                    ruolo=lead_data.get("ruolo", ""),
+                    obiettivi=lead_data.get("obiettivi_linkedin", ""),
+                )
+                if prefilter_rejection:
+                    logger.info("PRE-FILTER: Lead %s REJECTED (ruolo=%s, obiettivi=%s)",
+                                lead_name, lead_data.get("ruolo", ""), lead_data.get("obiettivi_linkedin", ""))
+
                 logger.info("Lead data loaded: %s - ruolo: %s - budget: %s",
                             lead_name, lead_data.get("ruolo", "N/A"), lead_data.get("budget", "N/A"))
 

@@ -257,6 +257,52 @@ def _format_time_spoken(time_str):
         return "alle {}".format(time_str)
 
 
+# B2C keywords for pre-filtering (Python-level, not LLM-level)
+B2C_KEYWORDS = [
+    "parrucchiere", "parrucchiera", "salone", "estetista", "centro estetico",
+    "ristorante", "pizzeria", "negozio", "bar", "palestra", "fiorista",
+    "pasticceria", "gelateria", "panetteria", "tabaccheria", "ferramenta",
+    "lavanderia", "barbiere", "tattoo", "tatuatore", "macellaio", "macelleria",
+    "alimentari", "profumeria", "ottico", "oreficeria",
+]
+
+JOB_SEEKER_KEYWORDS = [
+    "disoccupato", "disoccupata", "cerca lavoro", "cerco lavoro",
+    "trovare lavoro", "cerco impiego", "in cerca di lavoro",
+    "senza lavoro", "trovare un impiego",
+]
+
+
+def check_lead_prefilter(ruolo="", obiettivi=""):
+    """Pre-filtra lead B2C puri e cerca-lavoro PRIMA di chiamare il LLM.
+
+    Returns:
+        None se il lead puo' procedere normalmente,
+        str con il messaggio di chiusura se deve essere rifiutato.
+    """
+    text = "{} {}".format(ruolo, obiettivi).lower()
+
+    # Check B2C
+    for kw in B2C_KEYWORDS:
+        if kw in text:
+            return (
+                "Guardi, il nostro metodo funziona per chi lavora nel B2B. "
+                "Per la sua attivita' le mandiamo risorse gratuite via email. "
+                "Buona giornata!"
+            )
+
+    # Check cerca lavoro
+    for kw in JOB_SEEKER_KEYWORDS:
+        if kw in text:
+            return (
+                "Noi lavoriamo con chi vuole trovare clienti tramite LinkedIn. "
+                "Per la ricerca lavoro le mandiamo risorse via email. "
+                "In bocca al lupo!"
+            )
+
+    return None
+
+
 def get_knowledge_prompt(lead_name="", appointment_date="", appointment_time=""):
     """Restituisce il prompt completo con i dati del lead."""
     prompt = KNOWLEDGE_BASE
