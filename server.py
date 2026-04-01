@@ -1014,9 +1014,27 @@ def handle_media_stream(ws):
 
     # Flag to ignore input while AI is speaking
     is_speaking = threading.Event()
-    speaking_ended_at = [0.0]  # estimated timestamp when audio FINISHES PLAYING (not sending)
     playback_end_estimate = [0.0]  # when Twilio finishes playing audio (for silence timer)
     audio_packet_count = [0]  # counter for audio packets sent to Deepgram
+    mark_counter = [0]  # counter for unique mark names
+    pending_mark = [None]  # name of the mark we're waiting for from Twilio
+
+    # --- Helper: send mark to Twilio (to know when audio finishes playing) ---
+    def send_mark_to_twilio(mark_name):
+        """Send a mark event to Twilio. Twilio will echo it back when audio finishes playing."""
+        if not stream_sid:
+            return
+        msg = {
+            "event": "mark",
+            "streamSid": stream_sid,
+            "mark": {"name": mark_name},
+        }
+        with ws_send_lock:
+            try:
+                ws.send(json.dumps(msg))
+                logger.info("Mark sent to Twilio: %s", mark_name)
+            except Exception:
+                logger.exception("Error sending mark to Twilio")
 
     # --- Helper: speak text via TTS -> Twilio ---
     def speak(text):
@@ -1044,28 +1062,35 @@ def handle_media_stream(ws):
         except Exception:
             logger.exception("TTS streaming error")
         finally:
-            # Estimate when audio finishes PLAYING on the phone
+            # Send a mark to Twilio — it will echo it back when audio finishes playing
+            mark_counter[0] += 1
+            mark_name = "tts-end-{}".format(mark_counter[0])
+            pending_mark[0] = mark_name
+            send_mark_to_twilio(mark_name)
+
+            # Fallback: estimate playback duration in case mark never arrives
             # mulaw 8000Hz = 8000 bytes/sec
             streaming_elapsed = time.time() - speak_start
             playback_duration = total_audio_bytes / 8000.0
             remaining_playback = max(0, playback_duration - streaming_elapsed)
-            estimated_end = time.time() + remaining_playback
-            speaking_ended_at[0] = estimated_end
-            playback_end_estimate[0] = estimated_end
-            logger.info("TTS playback estimate: %.1fs total, %.1fs remaining", playback_duration, remaining_playback)
-            # Keep is_speaking ON until playback finishes, then clear + drain echo
-            def _wait_and_clear():
-                if remaining_playback > 0:
-                    time.sleep(remaining_playback)
-                is_speaking.clear()
-                # Drain transcripts that came in during playback (echo)
-                while not transcript_q.empty():
-                    try:
-                        transcript_q.get_nowait()
-                    except queue.Empty:
-                        break
-                logger.info("is_speaking cleared after playback end")
-            threading.Thread(target=_wait_and_clear, daemon=True).start()
+            playback_end_estimate[0] = time.time() + remaining_playback
+            logger.info("TTS playback estimate: %.1fs total, %.1fs remaining. Waiting for mark: %s",
+                        playback_duration, remaining_playback, mark_name)
+
+            # Fallback timer: if mark doesn't arrive within estimated time + 3s, clear anyway
+            def _fallback_clear():
+                fallback_wait = remaining_playback + 3.0
+                time.sleep(fallback_wait)
+                if is_speaking.is_set() and pending_mark[0] == mark_name:
+                    logger.warning("Mark %s never arrived, clearing is_speaking via fallback after %.1fs", mark_name, fallback_wait)
+                    is_speaking.clear()
+                    playback_end_estimate[0] = time.time()
+                    while not transcript_q.empty():
+                        try:
+                            transcript_q.get_nowait()
+                        except queue.Empty:
+                            break
+            threading.Thread(target=_fallback_clear, daemon=True).start()
 
     # --- Background thread: process transcripts ---
     def process_transcripts():
@@ -1093,9 +1118,7 @@ def handle_media_stream(ws):
                     logger.info("Ignoring input while speaking: %s", text)
                     continue
 
-                # Log playback timing for debugging but don't filter
-                time_since_playback_end = time.time() - speaking_ended_at[0]
-                logger.info("Transcript received (%.2fs since playback end): %s", time_since_playback_end, text)
+                logger.info("Transcript received (is_speaking=OFF): %s", text)
 
                 if buf:
                     buf = "{} {}".format(buf, text)
@@ -1261,8 +1284,31 @@ def handle_media_stream(ws):
                     opening_sent = True
                     threading.Thread(target=speak, args=(opening,), daemon=True).start()
 
+            elif event == "mark":
+                # Twilio confirms audio playback finished
+                mark_name = data.get("mark", {}).get("name", "")
+                logger.info("Mark received from Twilio: %s (pending: %s)", mark_name, pending_mark[0])
+                if mark_name and mark_name == pending_mark[0]:
+                    pending_mark[0] = None
+                    # Grace period: wait 500ms for echo tail to die out
+                    def _mark_clear(mn=mark_name):
+                        time.sleep(0.5)
+                        is_speaking.clear()
+                        playback_end_estimate[0] = time.time()
+                        # Drain any echo transcripts
+                        while not transcript_q.empty():
+                            try:
+                                transcript_q.get_nowait()
+                            except queue.Empty:
+                                break
+                        logger.info("is_speaking cleared after mark %s + 500ms grace", mn)
+                    threading.Thread(target=_mark_clear, daemon=True).start()
+
             elif event == "media":
-                # Forward raw mu-law audio to Deepgram via raw WebSocket
+                # LAYER 1: Gate audio to Deepgram — don't send while AI is speaking
+                if is_speaking.is_set():
+                    continue  # Drop inbound audio — prevents echo reaching STT
+
                 payload = data["media"]["payload"]
                 audio_bytes = base64.b64decode(payload)
                 audio_packet_count[0] += 1
