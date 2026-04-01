@@ -931,8 +931,9 @@ def handle_media_stream(ws):
     dg_ws_container = [None]
 
     dg_url = ("wss://api.deepgram.com/v1/listen"
-              "?model=nova-2&language=it&encoding=mulaw&sample_rate=8000"
-              "&channels=1&punctuate=true&interim_results=false&endpointing=300")
+              "?model=nova-2-phonecall&language=it&encoding=mulaw&sample_rate=8000"
+              "&channels=1&punctuate=true&interim_results=true"
+              "&endpointing=300&utterance_end_ms=1500&vad_events=true")
 
     try:
         dg = websocket.WebSocket()
@@ -945,8 +946,12 @@ def handle_media_stream(ws):
         ws.close()
         return
 
+    # Track last audio send time for KeepAlive gating
+    last_audio_sent_to_dg = [0.0]
+
     # Background thread: read Deepgram results (blocking recv, no timeout)
     def read_deepgram():
+        consecutive_errors = 0
         while not stop_event.is_set():
             try:
                 dg = dg_ws_container[0]
@@ -954,37 +959,60 @@ def handle_media_stream(ws):
                     time.sleep(0.5)
                     continue
                 result_raw = dg.recv()
+                consecutive_errors = 0
                 if not result_raw:
                     continue
                 result = json.loads(result_raw)
                 msg_type = result.get("type", "unknown")
                 if msg_type == "Results":
                     is_final = result.get("is_final", False)
+                    speech_final = result.get("speech_final", False)
                     transcript = (result.get("channel", {})
                                   .get("alternatives", [{}])[0]
                                   .get("transcript", ""))
                     if is_final and transcript:
-                        logger.info("Deepgram final transcript: %s", transcript)
+                        logger.info("Deepgram transcript (is_final=%s speech_final=%s): %s",
+                                    is_final, speech_final, transcript)
                         transcript_q.put(transcript)
+                elif msg_type == "UtteranceEnd":
+                    logger.info("Deepgram UtteranceEnd received")
+                elif msg_type == "SpeechStarted":
+                    logger.info("Deepgram SpeechStarted detected")
                 elif msg_type == "Metadata":
                     logger.info("Deepgram metadata: request_id=%s", result.get("request_id", "N/A"))
+                else:
+                    logger.info("Deepgram message type=%s", msg_type)
             except Exception as e:
                 if stop_event.is_set():
                     break
-                logger.warning("Deepgram read error: %s", e)
+                consecutive_errors += 1
+                logger.warning("Deepgram read error (#%d): %s", consecutive_errors, e)
+                if consecutive_errors > 3:
+                    logger.error("Deepgram connection dead, reconnecting...")
+                    try:
+                        new_dg = websocket.WebSocket()
+                        new_dg.connect(dg_url, header=["Authorization: Token {}".format(DEEPGRAM_API_KEY)])
+                        dg_ws_container[0] = new_dg
+                        consecutive_errors = 0
+                        logger.info("Deepgram reconnected successfully")
+                    except Exception:
+                        logger.exception("Deepgram reconnection failed")
                 time.sleep(0.5)
 
     dg_thread = threading.Thread(target=read_deepgram, daemon=True)
     dg_thread.start()
 
-    # KeepAlive thread — sends {"type": "KeepAlive"} every 5s to prevent NET-0001 timeout
+    # KeepAlive thread — only when no audio is flowing (prevents interference)
     def deepgram_keepalive():
         while not stop_event.is_set():
             time.sleep(5)
             try:
-                dg = dg_ws_container[0]
-                if dg and dg.connected:
-                    dg.send(json.dumps({"type": "KeepAlive"}))
+                # Only send KeepAlive if no audio sent recently (audio keeps connection alive by itself)
+                if time.time() - last_audio_sent_to_dg[0] > 8:
+                    dg = dg_ws_container[0]
+                    if dg and dg.connected:
+                        dg.send(json.dumps({"type": "KeepAlive"}))
+                        logger.info("Deepgram KeepAlive sent (no audio for >8s)")
             except Exception:
                 pass
 
@@ -1290,6 +1318,14 @@ def handle_media_stream(ws):
                 logger.info("Mark received from Twilio: %s (pending: %s)", mark_name, pending_mark[0])
                 if mark_name and mark_name == pending_mark[0]:
                     pending_mark[0] = None
+                    # Send Finalize to Deepgram to flush echo audio buffer
+                    try:
+                        dg = dg_ws_container[0]
+                        if dg and dg.connected:
+                            dg.send(json.dumps({"type": "Finalize"}))
+                            logger.info("Deepgram Finalize sent after mark %s", mark_name)
+                    except Exception:
+                        pass
                     # Grace period: wait 500ms for echo tail to die out
                     def _mark_clear(mn=mark_name):
                         time.sleep(0.5)
@@ -1318,6 +1354,7 @@ def handle_media_stream(ws):
                     dg = dg_ws_container[0]
                     if dg and dg.connected:
                         dg.send_binary(audio_bytes)
+                        last_audio_sent_to_dg[0] = time.time()
                 except Exception as e:
                     logger.warning("Error sending audio to Deepgram: %s", e)
 
