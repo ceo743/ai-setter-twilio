@@ -28,7 +28,7 @@ from flask_sock import Sock
 from twilio.rest import Client as TwilioClient
 from twilio.twiml.voice_response import Connect, VoiceResponse
 
-from knowledge_base import get_knowledge_prompt, check_lead_prefilter
+from knowledge_base import get_knowledge_prompt, check_lead_prefilter, _format_time_spoken
 from setter_prompt import get_setter_prompt
 import re
 
@@ -836,7 +836,7 @@ def test_response():
 
 @app.route("/health", methods=["GET"])
 def health():
-    return {"status": "ok", "version": "v4.1-fix-freeze"}
+    return {"status": "ok", "version": "v5-single-thread"}
 
 
 @app.route("/dashboard", methods=["GET"])
@@ -962,18 +962,89 @@ class ConversationManager:
 # WebSocket handler  (Twilio Media Stream <-> OpenAI Realtime API)
 # ---------------------------------------------------------------------------
 
+def build_realtime_prompt(lead_data):
+    """Build a compact system prompt for OpenAI Realtime API.
+
+    Keep it SHORT (<3000 chars) so GPT-4o can focus on LISTENING.
+    The full knowledge_base prompt is too long for real-time speech.
+    """
+    nome = lead_data.get("nome", "").strip()
+    cognome = lead_data.get("cognome", "").strip()
+    lead_name = "{} {}".format(nome, cognome).strip() or "il lead"
+    first_name = nome or "buongiorno"
+    ruolo = lead_data.get("ruolo", "")
+    obiettivi = lead_data.get("obiettivi_linkedin", "")
+    fatturato = lead_data.get("fatturato", "")
+    budget = lead_data.get("budget", "")
+    data_consulenza = lead_data.get("data_consulenza", "")
+    ora_consulenza = lead_data.get("ora_consulenza", "")
+    website_info = lead_data.get("website_info", "")
+
+    # Format appointment time spoken
+    ora_spoken = ""
+    if ora_consulenza:
+        ora_spoken = _format_time_spoken(ora_consulenza)
+
+    prompt = """Sei Stefania, assistente telefonica del team LinkedIn di Davide Caiazzo (DC Academy).
+Stai chiamando {lead_name} che ha prenotato una consulenza strategica gratuita.
+
+COME PARLI:
+- Italiano naturale, tono caldo e professionale. Sei una persona vera al telefono.
+- UNA frase per turno, massimo due. Poi FERMATI e ASCOLTA.
+- ASCOLTA davvero quello che dice il lead. Rispondi a quello che ha detto, non a quello che pensi dovrebbe dire.
+- Se il lead fa una domanda, RISPONDI alla domanda. Non ignorarla.
+- Mai dire "ti rubo tempo". Mai "perfetto" dopo qualcosa di negativo.
+- NON ripetere il saluto iniziale, ti sei gia' presentata.
+
+DATI DEL LEAD:
+- Nome: {lead_name}
+- Ruolo: {ruolo}
+- Obiettivi LinkedIn: {obiettivi}
+- Fatturato: {fatturato}
+- Budget: {budget}
+- Data consulenza: {data_consulenza} {ora_spoken}
+{website_section}
+NON chiedere cose che sai gia' da questi dati.
+
+FLUSSO (una domanda alla volta, aspetta sempre risposta):
+1. APERTURA: "La chiamo per la consulenza con Davide che ha prenotato. Due domande veloci per prepararle una strategia su misura, va bene?"
+2. Se il ruolo e' B2C puro (parrucchiere, estetista, ristorante, negozio, bar, palestra): "Il nostro metodo funziona per il B2B. Per la sua attivita' le mandiamo risorse gratuite via email. Buona giornata!" e CHIUDI.
+3. DISCOVERY: "Come mai ha deciso di prenotare?" - ascolta la risposta.
+4. "Questo e' qualcosa che vuole risolvere nei prossimi 30 giorni o e' piu' a lungo termine?"
+5. "Se Davide le propone una soluzione, e' lei che decide o deve sentire qualcun altro?"
+6. CHIUSURA qualificato: "La sua consulenza e' confermata per {data_consulenza} {ora_spoken}. Le chiedo la massima puntualita', sara' direttamente con Davide Caiazzo. Buona giornata!"
+   CHIUSURA non qualificato: "Per la sua situazione le mandiamo risorse gratuite via email. Buona giornata!"
+
+OBIEZIONI:
+- "Non ho tempo": "Mi serve meno di un minuto, solo due domande per confermarle la call con Davide."
+- "Quanto costa?": "I dettagli li vedra' con Davide. Il mio ruolo e' prepararle una call utile."
+- "Non mi interessa piu'": "Capisco, cosa e' cambiato rispetto a quando ha prenotato?"
+- "Ho gia' speso con un'agenzia": "Capisco. Noi siamo specializzati solo su LinkedIn B2B. Davide ha 223mila follower e risultati verificabili."
+
+REGOLE:
+- Rispondi SOLO con il testo parlato. Niente asterischi, parentesi, azioni.
+- Rispondi SEMPRE in italiano.
+- Dopo "buona giornata" la call e' finita.""".format(
+        lead_name=lead_name,
+        ruolo=ruolo or "non specificato",
+        obiettivi=obiettivi or "non specificati",
+        fatturato=fatturato or "non specificato",
+        budget=budget or "non specificato",
+        data_consulenza=data_consulenza or "da definire",
+        ora_spoken=ora_spoken,
+        website_section="\n- Info sito web: {}\n".format(website_info) if website_info else "",
+    )
+    return prompt, first_name
+
+
 @sock.route("/media-stream")
 def handle_media_stream(ws):
     """Handle Twilio Media Stream by bridging audio to/from OpenAI Realtime API.
 
-    Audio flows directly: Twilio mulaw <-> OpenAI Realtime (g711_ulaw).
-    No separate STT or TTS needed — OpenAI handles everything speech-to-speech.
-
-    Threading model:
-      - Main thread: receives from Twilio WS, queues messages to OpenAI
-      - write_openai thread: sends queued messages to OpenAI WS
-      - read_openai thread: receives from OpenAI WS, sends audio to Twilio WS
-    This avoids concurrent recv/send on the same websocket object.
+    SINGLE-THREAD model for OpenAI WebSocket:
+      - openai_thread: owns the OpenAI WS exclusively — both recv and send
+      - Main thread: receives from Twilio WS, queues messages for openai_thread
+    This eliminates ALL concurrent access to the OpenAI WebSocket.
     """
     logger.info("WebSocket connection opened")
 
@@ -989,10 +1060,9 @@ def handle_media_stream(ws):
     latest_media_timestamp = [0]
 
     # Gate: don't forward audio to OpenAI until opening message starts playing
-    # This prevents phone connection noise from triggering false barge-in
     opening_audio_started = threading.Event()
 
-    # Queue for sending messages to OpenAI (thread-safe)
+    # Queue for messages TO OpenAI (main thread -> openai_thread)
     openai_send_queue = queue.Queue()
 
     # --- Connect to OpenAI Realtime API ---
@@ -1012,216 +1082,178 @@ def handle_media_stream(ws):
         ws.close()
         return
 
-    # --- Helper: queue message for OpenAI (thread-safe) ---
+    # --- Helper: queue message for OpenAI (called from main thread) ---
     def send_to_openai(msg):
         openai_send_queue.put(msg)
 
-    # --- Helper: send audio to Twilio ---
-    def send_audio_to_twilio(audio_payload_b64):
-        """Send base64-encoded audio payload to Twilio."""
-        if not stream_sid:
-            return
-        msg = {
-            "event": "media",
-            "streamSid": stream_sid,
-            "media": {"payload": audio_payload_b64},
-        }
+    # --- Helper: send to Twilio WS (called from openai_thread) ---
+    def send_to_twilio(msg_dict):
         with ws_send_lock:
             try:
-                ws.send(json.dumps(msg))
+                ws.send(json.dumps(msg_dict))
             except Exception:
-                logger.exception("Error sending audio to Twilio")
+                logger.exception("Error sending to Twilio")
 
-    # --- Helper: clear Twilio audio buffer (for interruptions) ---
-    def clear_twilio_audio():
-        if not stream_sid:
-            return
-        msg = {"event": "clear", "streamSid": stream_sid}
-        with ws_send_lock:
-            try:
-                ws.send(json.dumps(msg))
-                logger.info("Twilio audio buffer cleared (interruption)")
-            except Exception:
-                logger.exception("Error clearing Twilio audio")
-
-    # --- Helper: send mark to Twilio ---
-    def send_mark_to_twilio(mark_name):
-        if not stream_sid:
-            return
-        msg = {"event": "mark", "streamSid": stream_sid, "mark": {"name": mark_name}}
-        with ws_send_lock:
-            try:
-                ws.send(json.dumps(msg))
-            except Exception:
-                pass
-
-    # --- Background thread: WRITE to OpenAI Realtime (from queue) ---
-    def write_openai():
+    # --- SINGLE background thread: owns OpenAI WS exclusively ---
+    def openai_loop():
+        """Single thread that handles ALL OpenAI WebSocket I/O.
+        - Sends queued messages (audio, config, etc.)
+        - Receives events (audio deltas, transcripts, etc.)
+        No other thread touches openai_ws.
+        """
         while not stop_event.is_set():
+            # 1) Drain send queue — send all pending messages
+            drained = 0
+            while drained < 200:  # cap per iteration to avoid starving recv
+                try:
+                    msg = openai_send_queue.get_nowait()
+                    openai_ws.send(json.dumps(msg))
+                    drained += 1
+                except queue.Empty:
+                    break
+                except Exception:
+                    if stop_event.is_set():
+                        return
+                    logger.exception("Error sending to OpenAI")
+
+            # 2) Try to receive one event (short timeout)
+            openai_ws.settimeout(0.05)  # 50ms — fast poll
             try:
-                msg = openai_send_queue.get(timeout=1.0)
-            except queue.Empty:
+                result_raw = openai_ws.recv()
+            except websocket.WebSocketTimeoutException:
                 continue
-            try:
-                openai_ws.send(json.dumps(msg))
-            except Exception:
+            except websocket.WebSocketConnectionClosedException:
+                logger.warning("OpenAI WebSocket closed")
+                break
+            except Exception as e:
                 if stop_event.is_set():
                     break
-                logger.exception("Error sending to OpenAI")
+                logger.warning("OpenAI recv error: %s", e)
+                continue
 
-    write_thread = threading.Thread(target=write_openai, daemon=True)
-    write_thread.start()
+            if not result_raw:
+                continue
 
-    # --- Background thread: READ from OpenAI Realtime ---
-    def read_openai():
-        while not stop_event.is_set():
             try:
-                openai_ws.settimeout(1.0)
-                try:
-                    result_raw = openai_ws.recv()
-                except websocket.WebSocketTimeoutException:
-                    continue
-                except websocket.WebSocketConnectionClosedException:
-                    logger.warning("OpenAI WebSocket closed")
-                    break
-                if not result_raw:
-                    continue
-
                 event = json.loads(result_raw)
-                event_type = event.get("type", "")
+            except (json.JSONDecodeError, TypeError):
+                continue
 
-                if event_type == "session.created":
-                    logger.info("OpenAI session created: %s", event.get("session", {}).get("id", ""))
+            event_type = event.get("type", "")
 
-                elif event_type == "session.updated":
-                    logger.info("OpenAI session configured successfully")
+            # --- Handle OpenAI events ---
+            if event_type == "session.created":
+                logger.info("OpenAI session created: %s", event.get("session", {}).get("id", ""))
 
-                elif event_type == "response.audio.delta":
-                    # Forward audio to Twilio
-                    delta = event.get("delta", "")
-                    if delta:
-                        send_audio_to_twilio(delta)
-                        # Mark that AI audio has started — now we can accept user audio
-                        if not opening_audio_started.is_set():
-                            opening_audio_started.set()
-                            logger.info("Opening message audio started — enabling user audio forwarding")
-                        if response_start_timestamp[0] is None:
-                            response_start_timestamp[0] = latest_media_timestamp[0]
-                    # Track item for interruption
-                    item_id = event.get("item_id", "")
-                    if item_id:
-                        last_assistant_item_id[0] = item_id
+            elif event_type == "session.updated":
+                logger.info("OpenAI session configured OK")
 
-                elif event_type == "response.audio.done":
-                    logger.info("OpenAI audio response complete")
-                    # Send mark to track when Twilio finishes playing
-                    send_mark_to_twilio("openai-response-done")
-
-                elif event_type == "response.audio_transcript.delta":
-                    # Partial transcript — ignore
-                    pass
-
-                elif event_type == "response.audio_transcript.done":
-                    # Full transcript of what AI said
-                    transcript = event.get("transcript", "")
-                    if transcript:
-                        logger.info("Stefania said: %s", transcript)
-                        transcript_log.append(("Stefania", transcript))
-
-                        # Auto-hangup detection
-                        lower = transcript.lower()
-                        if "buona giornata" in lower or "buona serata" in lower or "in bocca al lupo" in lower:
-                            logger.info("HANGUP: Detected farewell, closing in 4s")
-
-                            def delayed_hangup():
-                                time.sleep(4)
-                                stop_event.set()
-                            threading.Thread(target=delayed_hangup, daemon=True).start()
-
-                elif event_type == "conversation.item.input_audio_transcription.completed":
-                    # What the user said (transcribed)
-                    transcript = event.get("transcript", "")
-                    if transcript:
-                        logger.info("Lead said: %s", transcript)
-                        transcript_log.append(("Lead", transcript))
-
-                elif event_type == "conversation.item.input_audio_transcription.failed":
-                    error = event.get("error", {})
-                    logger.warning("Audio transcription failed: %s", error.get("message", error))
-
-                elif event_type == "input_audio_buffer.speech_started":
-                    # User started speaking — handle interruption (barge-in)
-                    # Only handle if opening audio has started (prevents false barge-in from phone noise)
+            elif event_type == "response.audio.delta":
+                delta = event.get("delta", "")
+                if delta and stream_sid:
+                    send_to_twilio({
+                        "event": "media",
+                        "streamSid": stream_sid,
+                        "media": {"payload": delta},
+                    })
                     if not opening_audio_started.is_set():
-                        logger.info("Speech detected but opening not started yet — ignoring barge-in")
-                        continue
-                    logger.info("User speech started (barge-in)")
-                    # Clear Twilio audio buffer so user hears silence immediately
-                    clear_twilio_audio()
-                    # Truncate the current AI response in OpenAI
-                    item_id = last_assistant_item_id[0]
-                    if item_id and response_start_timestamp[0] is not None:
-                        elapsed = latest_media_timestamp[0] - response_start_timestamp[0]
-                        elapsed_ms = int(elapsed) if elapsed > 0 else 0
-                        send_to_openai({
+                        opening_audio_started.set()
+                        logger.info("Opening audio started — user audio enabled")
+                    if response_start_timestamp[0] is None:
+                        response_start_timestamp[0] = latest_media_timestamp[0]
+                item_id = event.get("item_id", "")
+                if item_id:
+                    last_assistant_item_id[0] = item_id
+
+            elif event_type == "response.audio.done":
+                logger.info("AI audio complete")
+                if stream_sid:
+                    send_to_twilio({"event": "mark", "streamSid": stream_sid, "mark": {"name": "ai-done"}})
+
+            elif event_type == "response.audio_transcript.done":
+                transcript = event.get("transcript", "")
+                if transcript:
+                    logger.info("Stefania: %s", transcript)
+                    transcript_log.append(("Stefania", transcript))
+                    lower = transcript.lower()
+                    if "buona giornata" in lower or "buona serata" in lower or "in bocca al lupo" in lower:
+                        logger.info("HANGUP: farewell detected, closing in 4s")
+                        def _hangup():
+                            time.sleep(4)
+                            stop_event.set()
+                        threading.Thread(target=_hangup, daemon=True).start()
+
+            elif event_type == "conversation.item.input_audio_transcription.completed":
+                transcript = event.get("transcript", "")
+                if transcript:
+                    logger.info("Lead: %s", transcript)
+                    transcript_log.append(("Lead", transcript))
+
+            elif event_type == "conversation.item.input_audio_transcription.failed":
+                logger.warning("Transcription failed: %s", event.get("error", {}).get("message", ""))
+
+            elif event_type == "input_audio_buffer.speech_started":
+                if not opening_audio_started.is_set():
+                    logger.info("Speech before opening — ignored")
+                    continue
+                logger.info("Barge-in: user speaking")
+                if stream_sid:
+                    send_to_twilio({"event": "clear", "streamSid": stream_sid})
+                item_id = last_assistant_item_id[0]
+                if item_id and response_start_timestamp[0] is not None:
+                    elapsed = latest_media_timestamp[0] - response_start_timestamp[0]
+                    elapsed_ms = max(0, int(elapsed))
+                    try:
+                        openai_ws.send(json.dumps({
                             "type": "conversation.item.truncate",
                             "item_id": item_id,
                             "content_index": 0,
                             "audio_end_ms": elapsed_ms,
-                        })
-                        logger.info("Truncated AI response (item=%s, elapsed=%dms)", item_id, elapsed_ms)
-                    response_start_timestamp[0] = None
-                    last_assistant_item_id[0] = None
+                        }))
+                    except Exception:
+                        logger.exception("Error truncating")
+                response_start_timestamp[0] = None
+                last_assistant_item_id[0] = None
 
-                elif event_type == "input_audio_buffer.speech_stopped":
-                    logger.info("User speech stopped")
+            elif event_type == "input_audio_buffer.speech_stopped":
+                logger.info("User speech stopped")
 
-                elif event_type == "response.done":
-                    resp = event.get("response", {})
-                    status_info = resp.get("status", "")
-                    if status_info == "failed":
-                        logger.error("OpenAI response FAILED: %s", resp.get("status_details", {}))
-                    elif status_info == "cancelled":
-                        logger.info("OpenAI response cancelled (barge-in)")
-                    response_start_timestamp[0] = None
+            elif event_type == "response.done":
+                resp = event.get("response", {})
+                st = resp.get("status", "")
+                if st == "failed":
+                    logger.error("Response FAILED: %s", resp.get("status_details", {}))
+                elif st == "cancelled":
+                    logger.info("Response cancelled (barge-in)")
+                response_start_timestamp[0] = None
 
-                elif event_type == "error":
-                    error = event.get("error", {})
-                    logger.error("OpenAI Realtime error: type=%s code=%s msg=%s",
-                                 error.get("type", ""), error.get("code", ""), error.get("message", ""))
+            elif event_type == "error":
+                err = event.get("error", {})
+                logger.error("OpenAI error: %s %s %s", err.get("type", ""), err.get("code", ""), err.get("message", ""))
 
-                elif event_type == "rate_limits.updated":
-                    pass  # Ignore rate limit updates
+            elif event_type not in (
+                "response.created", "response.output_item.added", "response.output_item.done",
+                "response.content_part.added", "response.content_part.done",
+                "response.audio_transcript.delta", "conversation.item.created",
+                "input_audio_buffer.committed", "rate_limits.updated",
+            ):
+                logger.info("OpenAI event: %s", event_type)
 
-                else:
-                    # Log unknown events for debugging
-                    if event_type not in ("response.created", "response.output_item.added",
-                                          "response.output_item.done", "response.content_part.added",
-                                          "response.content_part.done", "conversation.item.created",
-                                          "input_audio_buffer.committed"):
-                        logger.info("OpenAI event: %s", event_type)
-
-            except Exception as e:
-                if stop_event.is_set():
-                    break
-                logger.warning("OpenAI read error: %s (type: %s)", e, type(e).__name__)
-                time.sleep(0.5)
-
-    openai_thread = threading.Thread(target=read_openai, daemon=True)
+    openai_thread = threading.Thread(target=openai_loop, daemon=True)
     openai_thread.start()
 
-    # --- Main receive loop (Twilio -> OpenAI) ---
+    # --- Main loop: receive from Twilio, queue to OpenAI ---
     session_configured = False
     try:
         while not stop_event.is_set():
             try:
                 raw_message = ws.receive()
             except Exception as e:
-                logger.info("WebSocket receive error: %s", e)
+                logger.info("Twilio WS closed: %s", e)
                 break
 
             if raw_message is None:
-                logger.info("WebSocket closed by remote")
+                logger.info("Twilio WS closed by remote")
                 break
 
             try:
@@ -1232,12 +1264,12 @@ def handle_media_stream(ws):
             event = data.get("event")
 
             if event == "connected":
-                logger.info("Twilio Media Stream connected")
+                logger.info("Twilio stream connected")
 
             elif event == "start":
                 stream_sid = data["start"]["streamSid"]
                 call_sid = data["start"].get("callSid", "")
-                logger.info("Stream started: SID=%s CallSID=%s", stream_sid, call_sid)
+                logger.info("Stream start: SID=%s CallSID=%s", stream_sid, call_sid)
 
                 # Look up lead data
                 lead_data = active_leads.get(call_sid, {})
@@ -1247,49 +1279,15 @@ def handle_media_stream(ws):
                             lead_data = val
                             break
 
-                lead_name = "{} {}".format(
-                    lead_data.get("nome", ""),
-                    lead_data.get("cognome", "")
-                ).strip() or "il lead"
+                # Build compact prompt
+                system_prompt, first_name = build_realtime_prompt(lead_data)
 
-                # Build system prompt
-                system_prompt = get_knowledge_prompt(
-                    lead_name=lead_name,
-                    appointment_date=lead_data.get("data_consulenza", ""),
-                    appointment_time=lead_data.get("ora_consulenza", ""),
-                )
-
-                # Add form data
-                if lead_data.get("ruolo"):
-                    system_prompt += "\n## RISPOSTE FORM CALENDLY (il lead ha gia' compilato queste info)"
-                    system_prompt += "\n- Ruolo: {}".format(lead_data.get("ruolo", ""))
-                    system_prompt += "\n- Come acquisisce clienti: {}".format(lead_data.get("acquisizione_clienti", ""))
-                    system_prompt += "\n- Obiettivi LinkedIn: {}".format(lead_data.get("obiettivi_linkedin", ""))
-                    system_prompt += "\n- Usa gia' LinkedIn: {}".format(lead_data.get("usa_linkedin", ""))
-                    system_prompt += "\n- Sito web: {}".format(lead_data.get("sito_web", ""))
-                    system_prompt += "\n- Fatturato azienda: {}".format(lead_data.get("fatturato", ""))
-                    system_prompt += "\n- Budget disponibile: {}".format(lead_data.get("budget", ""))
-                    website_info = lead_data.get("website_info", "")
-                    if website_info:
-                        system_prompt += "\n\n## INFO DAL SITO WEB DEL PROSPECT"
-                        system_prompt += "\n{}".format(website_info)
-                    system_prompt += "\n\nUSA QUESTE INFO per personalizzare la call. NON chiedere cose che sai gia'."
-
-                # Add phone-call brevity rules
-                system_prompt += "\n\n## REGOLE TELEFONATA"
-                system_prompt += "\n- Rispondi SEMPRE in italiano. Se il lead parla inglese, rispondi comunque in italiano."
-                system_prompt += "\n- Risposte BREVI: massimo 2 frasi per turno. Sei al telefono, non via email."
-                system_prompt += "\n- ASCOLTA davvero quello che dice il lead prima di rispondere."
-                system_prompt += "\n- Non ripetere informazioni che hai gia' detto."
-                system_prompt += "\n- Sii naturale e conversazionale, come una vera persona al telefono."
-
-                logger.info("Lead data loaded: %s - ruolo: %s - budget: %s",
-                            lead_name, lead_data.get("ruolo", "N/A"), lead_data.get("budget", "N/A"))
+                logger.info("Lead: %s %s - ruolo: %s - budget: %s",
+                            lead_data.get("nome", ""), lead_data.get("cognome", ""),
+                            lead_data.get("ruolo", "N/A"), lead_data.get("budget", "N/A"))
 
                 # Configure OpenAI session
-                first_name = lead_data.get("nome", "").strip() or "buongiorno"
-
-                session_config = {
+                send_to_openai({
                     "type": "session.update",
                     "session": {
                         "modalities": ["text", "audio"],
@@ -1297,42 +1295,34 @@ def handle_media_stream(ws):
                         "voice": "coral",
                         "input_audio_format": "g711_ulaw",
                         "output_audio_format": "g711_ulaw",
-                        "input_audio_transcription": {
-                            "model": "whisper-1",
-                        },
+                        "input_audio_transcription": {"model": "whisper-1"},
                         "turn_detection": {
                             "type": "server_vad",
                             "threshold": 0.6,
                             "prefix_padding_ms": 300,
-                            "silence_duration_ms": 600,
+                            "silence_duration_ms": 700,
                         },
-                        "temperature": 0.7,
-                        "max_response_output_tokens": 150,
+                        "temperature": 0.8,
+                        "max_response_output_tokens": 200,
                     },
-                }
-                send_to_openai(session_config)
+                })
                 session_configured = True
-                logger.info("OpenAI session configured with system prompt (%d chars)", len(system_prompt))
+                logger.info("Session configured (%d chars prompt)", len(system_prompt))
 
-                # Make AI speak first with personalized greeting
-                opening_text = "Ciao {}, sono Stefania del team LinkedIn di Davide Caiazzo. La chiamo per la consulenza che ha prenotato.".format(first_name)
+                # Opening greeting
+                opening = "Ciao {}, sono Stefania del team LinkedIn di Davide Caiazzo. La chiamo per la consulenza che ha prenotato.".format(first_name)
                 send_to_openai({
                     "type": "conversation.item.create",
                     "item": {
                         "type": "message",
                         "role": "user",
-                        "content": [{
-                            "type": "input_text",
-                            "text": "Il lead ha appena risposto al telefono. Salutalo con: '{}'".format(opening_text),
-                        }],
+                        "content": [{"type": "input_text", "text": "Il lead ha risposto. Salutalo: '{}'".format(opening)}],
                     },
                 })
                 send_to_openai({"type": "response.create"})
-                logger.info("Opening message triggered for: %s", first_name)
+                logger.info("Opening triggered for: %s", first_name)
 
             elif event == "media":
-                # Forward caller audio to OpenAI — but ONLY after opening audio started
-                # This prevents phone noise from triggering false barge-in
                 payload = data["media"]["payload"]
                 timestamp = int(data["media"].get("timestamp", "0"))
                 latest_media_timestamp[0] = timestamp
@@ -1344,19 +1334,17 @@ def handle_media_stream(ws):
                     })
 
             elif event == "mark":
-                mark_name = data.get("mark", {}).get("name", "")
-                logger.info("Mark received from Twilio: %s", mark_name)
+                pass  # marks handled silently
 
             elif event == "stop":
                 logger.info("Stream stopped")
                 break
 
     except Exception:
-        logger.exception("Error in WebSocket handler")
+        logger.exception("Error in media stream handler")
     finally:
         stop_event.set()
         openai_thread.join(timeout=5.0)
-        write_thread.join(timeout=3.0)
         try:
             if openai_ws.connected:
                 openai_ws.close()
@@ -1369,7 +1357,6 @@ def handle_media_stream(ws):
             transcript_text = "\n".join(
                 "{}: {}".format(role, text) for role, text in transcript_log
             )
-            # Determine call outcome
             full_text = " ".join(t for _, t in transcript_log).lower()
             non_target_phrases = ["non sono interessat", "non mi interessa", "non fa per me",
                                   "non e' il momento", "non è il momento", "non ho tempo", "non ho bisogno"]
@@ -1392,7 +1379,7 @@ def handle_media_stream(ws):
                 "data_consulenza": lead_data.get("data_consulenza", ""),
             }
             call_history.append(entry)
-            logger.info("Call saved to history: %s %s - %s", entry["nome"], entry["cognome"], entry["status"])
+            logger.info("Call saved: %s %s - %s", entry["nome"], entry["cognome"], entry["status"])
 
             if status == "qualificato" and phone:
                 schedule_reminder(phone, lead_data)
