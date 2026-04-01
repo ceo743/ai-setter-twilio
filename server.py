@@ -836,7 +836,7 @@ def test_response():
 
 @app.route("/health", methods=["GET"])
 def health():
-    return {"status": "ok", "version": "v5-single-thread"}
+    return {"status": "ok", "version": "v6-openai-guidelines"}
 
 
 @app.route("/dashboard", methods=["GET"])
@@ -985,46 +985,80 @@ def build_realtime_prompt(lead_data):
     if ora_consulenza:
         ora_spoken = _format_time_spoken(ora_consulenza)
 
-    prompt = """Sei Stefania, assistente telefonica del team LinkedIn di Davide Caiazzo (DC Academy).
-Stai chiamando {lead_name} che ha prenotato una consulenza strategica gratuita.
+    prompt = """## RUOLO
+Sei Stefania, assistente telefonica del team LinkedIn di Davide Caiazzo (DC Academy).
+Stai chiamando {lead_name} che ha prenotato una consulenza strategica gratuita con Davide.
+Il tuo obiettivo: pre-qualificare il lead e confermare o annullare la consulenza.
 
-COME PARLI:
-- Italiano naturale, tono caldo e professionale. Sei una persona vera al telefono.
-- UNA frase per turno, massimo due. Poi FERMATI e ASCOLTA.
-- ASCOLTA davvero quello che dice il lead. Rispondi a quello che ha detto, non a quello che pensi dovrebbe dire.
-- Se il lead fa una domanda, RISPONDI alla domanda. Non ignorarla.
-- Mai dire "ti rubo tempo". Mai "perfetto" dopo qualcosa di negativo.
-- NON ripetere il saluto iniziale, ti sei gia' presentata.
+## PERSONALITA' E TONO
+- Personalita': Cordiale, empatica, genuinamente interessata alla persona al telefono.
+- Tono: Caldo, professionale, mai invadente. Come una collega che chiama per aiutare.
+- Lunghezza: MASSIMO 1-2 frasi per turno. Poi FERMATI.
+- Velocita': Parla in modo naturale e scorrevole, non troppo veloce ne' troppo lento.
+- NON ripetere mai la stessa frase due volte. Varia le tue risposte.
+- NON includere effetti sonori o espressioni onomatopeiche.
+- Rispondi SOLO con il testo parlato. Niente asterischi, parentesi, o descrizioni di azioni.
 
-DATI DEL LEAD:
-- Nome: {lead_name}
-- Ruolo: {ruolo}
-- Obiettivi LinkedIn: {obiettivi}
-- Fatturato: {fatturato}
-- Budget: {budget}
-- Data consulenza: {data_consulenza} {ora_spoken}
+## LINGUA
+La conversazione sara' SOLO in italiano. NON rispondere MAI in altre lingue, anche se il lead parla in un'altra lingua.
+
+## AUDIO NON CHIARO
+Se l'audio del lead non e' chiaro (rumore di fondo, silenzio, incomprensibile), chiedi chiarimento:
+- "Mi scusi, non ho sentito bene. Puo' ripetere?"
+- Se il silenzio continua: "{first_name}, mi sente? E' ancora in linea?"
+- Se continua ancora: "Sembra ci siano problemi di linea. La richiamo. Arrivederci!"
+
+## CONTESTO
+- Dati lead: {lead_name}, ruolo: {ruolo}, obiettivi: {obiettivi}
+- Fatturato: {fatturato}, budget: {budget}
+- Consulenza prenotata: {data_consulenza} {ora_spoken}
 {website_section}
-NON chiedere cose che sai gia' da questi dati.
+- DC Academy insegna a professionisti B2B a usare LinkedIn per trovare clienti
+- La consulenza e' gratuita, la fa Davide Caiazzo (223mila follower LinkedIn)
+- NON chiedere informazioni che hai gia' dai dati sopra
 
-FLUSSO (una domanda alla volta, aspetta sempre risposta):
-1. APERTURA: "La chiamo per la consulenza con Davide che ha prenotato. Due domande veloci per prepararle una strategia su misura, va bene?"
-2. Se il ruolo e' B2C puro (parrucchiere, estetista, ristorante, negozio, bar, palestra): "Il nostro metodo funziona per il B2B. Per la sua attivita' le mandiamo risorse gratuite via email. Buona giornata!" e CHIUDI.
-3. DISCOVERY: "Come mai ha deciso di prenotare?" - ascolta la risposta.
-4. "Questo e' qualcosa che vuole risolvere nei prossimi 30 giorni o e' piu' a lungo termine?"
-5. "Se Davide le propone una soluzione, e' lei che decide o deve sentire qualcun altro?"
-6. CHIUSURA qualificato: "La sua consulenza e' confermata per {data_consulenza} {ora_spoken}. Le chiedo la massima puntualita', sara' direttamente con Davide Caiazzo. Buona giornata!"
-   CHIUSURA non qualificato: "Per la sua situazione le mandiamo risorse gratuite via email. Buona giornata!"
+## FLUSSO CONVERSAZIONE
 
-OBIEZIONI:
-- "Non ho tempo": "Mi serve meno di un minuto, solo due domande per confermarle la call con Davide."
-- "Quanto costa?": "I dettagli li vedra' con Davide. Il mio ruolo e' prepararle una call utile."
-- "Non mi interessa piu'": "Capisco, cosa e' cambiato rispetto a quando ha prenotato?"
-- "Ho gia' speso con un'agenzia": "Capisco. Noi siamo specializzati solo su LinkedIn B2B. Davide ha 223mila follower e risultati verificabili."
+FASE 1 - DOPO IL SALUTO
+- Goal: Spiegare perche' chiami e ottenere il permesso di fare domande
+- Quando il lead risponde "pronto", "si", "ciao", rispondi:
+- "Piacere! La chiamo per la consulenza con Davide che ha prenotato. Le faccio un paio di domande veloci per prepararle una strategia su misura, va bene?"
+- NON USARE SEMPRE QUESTA FRASE, VARIA
+- Uscita: Il lead accetta di rispondere
 
-REGOLE:
-- Rispondi SOLO con il testo parlato. Niente asterischi, parentesi, azioni.
-- Rispondi SEMPRE in italiano.
-- Dopo "buona giornata" la call e' finita.""".format(
+FASE 2 - FILTRO B2C
+- Goal: Verificare se il lead e' B2B
+- Se il ruolo e' parrucchiere, estetista, ristorante, negozio, bar, palestra o altra attivita' che vende solo a privati:
+- "Guardi, le dico la verita': il nostro metodo funziona per chi vende ad aziende. Per la sua attivita' le mandiamo risorse gratuite via email. Buona giornata!"
+- Uscita: Chiudi la call
+
+FASE 3 - DISCOVERY (una domanda alla volta, FERMATI e ascolta)
+- Goal: Capire motivazione, urgenza, chi decide
+- "Come ci ha conosciuto?" — Ascolta, commenta brevemente ("Ah bene!")
+- "Come mai ha deciso di prenotare?" — Ascolta DAVVERO, rispondi a quello che dice
+- "Vuole risolvere la cosa nei prossimi 30 giorni o e' piu' a lungo termine?"
+- "Se Davide le propone un percorso, e' lei che decide o deve sentire qualcun altro?"
+- IMPORTANTE: Se il lead fa una domanda, RISPONDI PRIMA alla sua domanda
+- Uscita: Hai le informazioni per qualificare
+
+FASE 4 - CHIUSURA
+- Goal: Confermare o annullare la consulenza
+- Qualificato: "Perfetto {first_name}! La consulenza e' confermata per {data_consulenza} {ora_spoken}. Le chiedo la massima puntualita', sara' direttamente con Davide Caiazzo. Grazie mille e buona giornata!"
+- Non qualificato: "Capisco. Per la sua situazione le mandiamo risorse gratuite via email. Ci ricontatti quando vuole. Buona giornata!"
+- Uscita: "buona giornata" = call finita
+
+## OBIEZIONI
+- "Non ho tempo" -> "Capisco, due minuti e la lascio andare. Devo confermarle la call con Davide, altrimenti viene assegnata a un altro consulente."
+- "Quanto costa?" -> "I dettagli li vedra' con Davide. Il mio ruolo e' prepararle una call utile."
+- "Non mi interessa" -> "Capisco, cosa e' cambiato rispetto a quando ha prenotato?"
+- "Ho gia' speso con un'agenzia" -> "Mi dispiace. Noi siamo specializzati solo su LinkedIn B2B, con risultati verificabili."
+
+## REGOLE
+- MAI dire "ti rubo tempo"
+- MAI dire "perfetto" dopo qualcosa di negativo, usa "capisco"
+- NON ripetere il saluto iniziale, ti sei gia' presentata
+- Dopo "buona giornata" la call e' FINITA""".format(
+        first_name=first_name,
         lead_name=lead_name,
         ruolo=ruolo or "non specificato",
         obiettivi=obiettivi or "non specificati",
@@ -1094,6 +1128,10 @@ def handle_media_stream(ws):
             except Exception:
                 logger.exception("Error sending to Twilio")
 
+    # Track when audio was last committed (for response timeout safety net)
+    last_committed_time = [0.0]
+    waiting_for_response = [False]
+
     # --- SINGLE background thread: owns OpenAI WS exclusively ---
     def openai_loop():
         """Single thread that handles ALL OpenAI WebSocket I/O.
@@ -1104,7 +1142,7 @@ def handle_media_stream(ws):
         while not stop_event.is_set():
             # 1) Drain send queue — send all pending messages
             drained = 0
-            while drained < 200:  # cap per iteration to avoid starving recv
+            while drained < 200:  # cap to avoid starving recv
                 try:
                     msg = openai_send_queue.get_nowait()
                     openai_ws.send(json.dumps(msg))
@@ -1116,8 +1154,17 @@ def handle_media_stream(ws):
                         return
                     logger.exception("Error sending to OpenAI")
 
+            # Safety net: if we committed audio but no response came in 8s, force one
+            if waiting_for_response[0] and (time.time() - last_committed_time[0]) > 8.0:
+                logger.warning("SAFETY: No response 8s after commit — forcing response.create")
+                try:
+                    openai_ws.send(json.dumps({"type": "response.create"}))
+                except Exception:
+                    pass
+                waiting_for_response[0] = False
+
             # 2) Try to receive one event (short timeout)
-            openai_ws.settimeout(0.05)  # 50ms — fast poll
+            openai_ws.settimeout(0.05)  # 50ms
             try:
                 result_raw = openai_ws.recv()
             except websocket.WebSocketTimeoutException:
@@ -1161,6 +1208,8 @@ def handle_media_stream(ws):
                         logger.info("Opening audio started — user audio enabled")
                     if response_start_timestamp[0] is None:
                         response_start_timestamp[0] = latest_media_timestamp[0]
+                    # Response is being generated — clear the waiting flag
+                    waiting_for_response[0] = False
                 item_id = event.get("item_id", "")
                 if item_id:
                     last_assistant_item_id[0] = item_id
@@ -1177,9 +1226,9 @@ def handle_media_stream(ws):
                     transcript_log.append(("Stefania", transcript))
                     lower = transcript.lower()
                     if "buona giornata" in lower or "buona serata" in lower or "in bocca al lupo" in lower:
-                        logger.info("HANGUP: farewell detected, closing in 4s")
+                        logger.info("HANGUP: farewell detected, closing in 5s")
                         def _hangup():
-                            time.sleep(4)
+                            time.sleep(5)
                             stop_event.set()
                         threading.Thread(target=_hangup, daemon=True).start()
 
@@ -1192,6 +1241,12 @@ def handle_media_stream(ws):
             elif event_type == "conversation.item.input_audio_transcription.failed":
                 logger.warning("Transcription failed: %s", event.get("error", {}).get("message", ""))
 
+            elif event_type == "input_audio_buffer.committed":
+                # Audio buffer committed — OpenAI should auto-generate response (server VAD)
+                logger.info("Audio committed — waiting for response")
+                last_committed_time[0] = time.time()
+                waiting_for_response[0] = True
+
             elif event_type == "input_audio_buffer.speech_started":
                 if not opening_audio_started.is_set():
                     logger.info("Speech before opening — ignored")
@@ -1199,6 +1254,7 @@ def handle_media_stream(ws):
                 logger.info("Barge-in: user speaking")
                 if stream_sid:
                     send_to_twilio({"event": "clear", "streamSid": stream_sid})
+                # Only truncate if AI is currently speaking
                 item_id = last_assistant_item_id[0]
                 if item_id and response_start_timestamp[0] is not None:
                     elapsed = latest_media_timestamp[0] - response_start_timestamp[0]
@@ -1210,8 +1266,11 @@ def handle_media_stream(ws):
                             "content_index": 0,
                             "audio_end_ms": elapsed_ms,
                         }))
+                        logger.info("Truncated (item=%s, %dms)", item_id, elapsed_ms)
                     except Exception:
                         logger.exception("Error truncating")
+                else:
+                    logger.info("Barge-in but no active AI audio — no truncation needed")
                 response_start_timestamp[0] = None
                 last_assistant_item_id[0] = None
 
@@ -1226,6 +1285,7 @@ def handle_media_stream(ws):
                 elif st == "cancelled":
                     logger.info("Response cancelled (barge-in)")
                 response_start_timestamp[0] = None
+                waiting_for_response[0] = False
 
             elif event_type == "error":
                 err = event.get("error", {})
@@ -1235,7 +1295,7 @@ def handle_media_stream(ws):
                 "response.created", "response.output_item.added", "response.output_item.done",
                 "response.content_part.added", "response.content_part.done",
                 "response.audio_transcript.delta", "conversation.item.created",
-                "input_audio_buffer.committed", "rate_limits.updated",
+                "rate_limits.updated",
             ):
                 logger.info("OpenAI event: %s", event_type)
 
@@ -1292,31 +1352,31 @@ def handle_media_stream(ws):
                     "session": {
                         "modalities": ["text", "audio"],
                         "instructions": system_prompt,
-                        "voice": "coral",
+                        "voice": "ash",
                         "input_audio_format": "g711_ulaw",
                         "output_audio_format": "g711_ulaw",
                         "input_audio_transcription": {"model": "whisper-1"},
                         "turn_detection": {
                             "type": "server_vad",
-                            "threshold": 0.6,
+                            "threshold": 0.5,
                             "prefix_padding_ms": 300,
-                            "silence_duration_ms": 700,
+                            "silence_duration_ms": 800,
                         },
                         "temperature": 0.8,
-                        "max_response_output_tokens": 200,
+                        "max_response_output_tokens": 250,
                     },
                 })
                 session_configured = True
                 logger.info("Session configured (%d chars prompt)", len(system_prompt))
 
-                # Opening greeting
-                opening = "Ciao {}, sono Stefania del team LinkedIn di Davide Caiazzo. La chiamo per la consulenza che ha prenotato.".format(first_name)
+                # Opening greeting — ONLY the greeting, then STOP and wait for lead
                 send_to_openai({
                     "type": "conversation.item.create",
                     "item": {
                         "type": "message",
                         "role": "user",
-                        "content": [{"type": "input_text", "text": "Il lead ha risposto. Salutalo: '{}'".format(opening)}],
+                        "content": [{"type": "input_text",
+                            "text": "Il lead ha appena risposto al telefono. Di' SOLO: 'Ciao {}, sono Stefania del team LinkedIn di Davide Caiazzo!' e poi FERMATI. Non aggiungere altro. Aspetta che il lead risponda.".format(first_name)}],
                     },
                 })
                 send_to_openai({"type": "response.create"})
