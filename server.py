@@ -738,6 +738,56 @@ pre{{white-space:pre-wrap;word-wrap:break-word;background:#f9f9f9;padding:15px;b
     )
 
 
+@app.route("/test-response", methods=["POST"])
+def test_response():
+    """Test Groq responses without making a phone call.
+
+    POST JSON with:
+      - messages: list of {"role": "user"|"assistant", "content": "..."}
+      - OR message: single string (shortcut for one user message)
+
+    Returns the AI response with word count and token info.
+    """
+    data = request.json or {}
+
+    # Build conversation manager with test lead data
+    nome = data.get("nome", "Marco")
+    data_consulenza = data.get("data_consulenza", "2 aprile 2026 alle 15:00")
+    prompt = get_setter_prompt(lead_name=nome, appointment_date=data_consulenza)
+    conv = ConversationManager(prompt)
+
+    # Support single message or conversation
+    messages = data.get("messages", [])
+    if not messages and data.get("message"):
+        messages = [{"role": "user", "content": data["message"]}]
+
+    if not messages:
+        # Default test conversation
+        messages = [
+            {"role": "user", "content": "Pronto?"},
+        ]
+
+    responses = []
+    for msg in messages:
+        if msg["role"] == "user":
+            resp = conv.get_response(msg["content"])
+            word_count = len(resp.split())
+            responses.append({
+                "user": msg["content"],
+                "stefania": resp,
+                "word_count": word_count,
+                "ok": word_count <= 15,
+            })
+        elif msg["role"] == "assistant":
+            # Inject assistant message into history
+            conv.messages.append({"role": "assistant", "content": msg["content"]})
+
+    return jsonify({
+        "responses": responses,
+        "total_turns": len(responses),
+    })
+
+
 @app.route("/health", methods=["GET"])
 def health():
     return {"status": "ok"}
