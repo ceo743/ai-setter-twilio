@@ -836,7 +836,7 @@ def test_response():
 
 @app.route("/health", methods=["GET"])
 def health():
-    return {"status": "ok", "version": "v4-openai-realtime"}
+    return {"status": "ok", "version": "v4.1-fix-freeze"}
 
 
 @app.route("/dashboard", methods=["GET"])
@@ -966,8 +966,14 @@ class ConversationManager:
 def handle_media_stream(ws):
     """Handle Twilio Media Stream by bridging audio to/from OpenAI Realtime API.
 
-    Audio flows directly: Twilio mulaw <-> OpenAI Realtime (pcm16/g711_ulaw).
+    Audio flows directly: Twilio mulaw <-> OpenAI Realtime (g711_ulaw).
     No separate STT or TTS needed — OpenAI handles everything speech-to-speech.
+
+    Threading model:
+      - Main thread: receives from Twilio WS, queues messages to OpenAI
+      - write_openai thread: sends queued messages to OpenAI WS
+      - read_openai thread: receives from OpenAI WS, sends audio to Twilio WS
+    This avoids concurrent recv/send on the same websocket object.
     """
     logger.info("WebSocket connection opened")
 
@@ -978,14 +984,19 @@ def handle_media_stream(ws):
     ws_send_lock = threading.Lock()
 
     # Track current response for interruption handling
-    current_response_id = [None]
     last_assistant_item_id = [None]
     response_start_timestamp = [None]
     latest_media_timestamp = [0]
 
+    # Gate: don't forward audio to OpenAI until opening message starts playing
+    # This prevents phone connection noise from triggering false barge-in
+    opening_audio_started = threading.Event()
+
+    # Queue for sending messages to OpenAI (thread-safe)
+    openai_send_queue = queue.Queue()
+
     # --- Connect to OpenAI Realtime API ---
     openai_ws = websocket.WebSocket()
-    openai_ws_lock = threading.Lock()
 
     try:
         openai_ws.connect(
@@ -1001,13 +1012,9 @@ def handle_media_stream(ws):
         ws.close()
         return
 
-    # --- Helper: send message to OpenAI ---
+    # --- Helper: queue message for OpenAI (thread-safe) ---
     def send_to_openai(msg):
-        with openai_ws_lock:
-            try:
-                openai_ws.send(json.dumps(msg))
-            except Exception:
-                logger.exception("Error sending to OpenAI")
+        openai_send_queue.put(msg)
 
     # --- Helper: send audio to Twilio ---
     def send_audio_to_twilio(audio_payload_b64):
@@ -1048,19 +1055,35 @@ def handle_media_stream(ws):
             except Exception:
                 pass
 
-    # --- Background thread: read from OpenAI Realtime ---
+    # --- Background thread: WRITE to OpenAI Realtime (from queue) ---
+    def write_openai():
+        while not stop_event.is_set():
+            try:
+                msg = openai_send_queue.get(timeout=1.0)
+            except queue.Empty:
+                continue
+            try:
+                openai_ws.send(json.dumps(msg))
+            except Exception:
+                if stop_event.is_set():
+                    break
+                logger.exception("Error sending to OpenAI")
+
+    write_thread = threading.Thread(target=write_openai, daemon=True)
+    write_thread.start()
+
+    # --- Background thread: READ from OpenAI Realtime ---
     def read_openai():
         while not stop_event.is_set():
             try:
-                with openai_ws_lock:
-                    if not openai_ws.connected:
-                        break
-                # Use a short timeout to check stop_event periodically
                 openai_ws.settimeout(1.0)
                 try:
                     result_raw = openai_ws.recv()
                 except websocket.WebSocketTimeoutException:
                     continue
+                except websocket.WebSocketConnectionClosedException:
+                    logger.warning("OpenAI WebSocket closed")
+                    break
                 if not result_raw:
                     continue
 
@@ -1078,6 +1101,10 @@ def handle_media_stream(ws):
                     delta = event.get("delta", "")
                     if delta:
                         send_audio_to_twilio(delta)
+                        # Mark that AI audio has started — now we can accept user audio
+                        if not opening_audio_started.is_set():
+                            opening_audio_started.set()
+                            logger.info("Opening message audio started — enabling user audio forwarding")
                         if response_start_timestamp[0] is None:
                             response_start_timestamp[0] = latest_media_timestamp[0]
                     # Track item for interruption
@@ -1091,7 +1118,7 @@ def handle_media_stream(ws):
                     send_mark_to_twilio("openai-response-done")
 
                 elif event_type == "response.audio_transcript.delta":
-                    # Partial transcript of what AI is saying — log for debugging
+                    # Partial transcript — ignore
                     pass
 
                 elif event_type == "response.audio_transcript.done":
@@ -1118,8 +1145,16 @@ def handle_media_stream(ws):
                         logger.info("Lead said: %s", transcript)
                         transcript_log.append(("Lead", transcript))
 
+                elif event_type == "conversation.item.input_audio_transcription.failed":
+                    error = event.get("error", {})
+                    logger.warning("Audio transcription failed: %s", error.get("message", error))
+
                 elif event_type == "input_audio_buffer.speech_started":
                     # User started speaking — handle interruption (barge-in)
+                    # Only handle if opening audio has started (prevents false barge-in from phone noise)
+                    if not opening_audio_started.is_set():
+                        logger.info("Speech detected but opening not started yet — ignoring barge-in")
+                        continue
                     logger.info("User speech started (barge-in)")
                     # Clear Twilio audio buffer so user hears silence immediately
                     clear_twilio_audio()
@@ -1142,16 +1177,24 @@ def handle_media_stream(ws):
                     logger.info("User speech stopped")
 
                 elif event_type == "response.done":
+                    resp = event.get("response", {})
+                    status_info = resp.get("status", "")
+                    if status_info == "failed":
+                        logger.error("OpenAI response FAILED: %s", resp.get("status_details", {}))
+                    elif status_info == "cancelled":
+                        logger.info("OpenAI response cancelled (barge-in)")
                     response_start_timestamp[0] = None
 
                 elif event_type == "error":
-                    logger.error("OpenAI Realtime error: %s", event.get("error", {}))
+                    error = event.get("error", {})
+                    logger.error("OpenAI Realtime error: type=%s code=%s msg=%s",
+                                 error.get("type", ""), error.get("code", ""), error.get("message", ""))
 
                 elif event_type == "rate_limits.updated":
                     pass  # Ignore rate limit updates
 
                 else:
-                    # Log unknown events for debugging (but not too verbose)
+                    # Log unknown events for debugging
                     if event_type not in ("response.created", "response.output_item.added",
                                           "response.output_item.done", "response.content_part.added",
                                           "response.content_part.done", "conversation.item.created",
@@ -1161,7 +1204,7 @@ def handle_media_stream(ws):
             except Exception as e:
                 if stop_event.is_set():
                     break
-                logger.warning("OpenAI read error: %s", e)
+                logger.warning("OpenAI read error: %s (type: %s)", e, type(e).__name__)
                 time.sleep(0.5)
 
     openai_thread = threading.Thread(target=read_openai, daemon=True)
@@ -1259,9 +1302,9 @@ def handle_media_stream(ws):
                         },
                         "turn_detection": {
                             "type": "server_vad",
-                            "threshold": 0.5,
+                            "threshold": 0.6,
                             "prefix_padding_ms": 300,
-                            "silence_duration_ms": 500,
+                            "silence_duration_ms": 600,
                         },
                         "temperature": 0.7,
                         "max_response_output_tokens": 150,
@@ -1288,12 +1331,13 @@ def handle_media_stream(ws):
                 logger.info("Opening message triggered for: %s", first_name)
 
             elif event == "media":
-                # Forward caller audio to OpenAI
+                # Forward caller audio to OpenAI — but ONLY after opening audio started
+                # This prevents phone noise from triggering false barge-in
                 payload = data["media"]["payload"]
                 timestamp = int(data["media"].get("timestamp", "0"))
                 latest_media_timestamp[0] = timestamp
 
-                if session_configured:
+                if session_configured and opening_audio_started.is_set():
                     send_to_openai({
                         "type": "input_audio_buffer.append",
                         "audio": payload,
@@ -1312,6 +1356,7 @@ def handle_media_stream(ws):
     finally:
         stop_event.set()
         openai_thread.join(timeout=5.0)
+        write_thread.join(timeout=3.0)
         try:
             if openai_ws.connected:
                 openai_ws.close()
