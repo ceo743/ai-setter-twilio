@@ -554,24 +554,11 @@ def calendly_webhook():
                     to_number = qa.get("answer", "")
                     break
 
-        # FILTRO RISPOSTE FORM: blocca lead che nelle risposte dicono di non prenotare
-        BLOCK_PHRASES = [
-            "non prenotare", "non prenotate", "non chiamare", "non chiamate",
-            "guarda il video", "guardare il video", "guardate il video",
-            "non mi interessa", "non sono interessat",
-            "annulla", "cancella", "disdici",
-            "non voglio", "non desidero",
-            "solo il video", "solo video",
-            "non posso investire", "non ancora nata",
-            "trovare lavoro", "fare carriera",
-        ]
+        # FILTRO RISPOSTE FORM: DISABILITATO — il pre-filtro Python (check_lead_prefilter)
+        # gestisce B2C e cerca-lavoro durante la chiamata, non serve bloccare qui.
+        # I lead vengono sempre chiamati e filtrati in conversazione.
         all_answers = " ".join(qa.get("answer", "") for qa in questions).lower()
-        blocked_phrase = next((p for p in BLOCK_PHRASES if p in all_answers), None)
-        if blocked_phrase:
-            logger.info("BLOCKED LEAD: %s %s - form answer contains '%s'. Full answers: %s",
-                        form_data.get("nome", ""), form_data.get("cognome", ""),
-                        blocked_phrase, all_answers[:300])
-            return {"status": "blocked", "reason": "Lead form answers indicate no call wanted", "phrase": blocked_phrase}
+        logger.info("Lead form answers: %s", all_answers[:300])
 
         logger.info("Lead: %s %s - Phone: %s", form_data["nome"], form_data["cognome"], to_number)
     else:
