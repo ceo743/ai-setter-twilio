@@ -622,14 +622,16 @@ def amd_status():
     answered_by = request.form.get("AnsweredBy", "")
     logger.info("AMD: SID=%s AnsweredBy=%s", call_sid, answered_by)
 
-    if answered_by in ("machine_start", "machine_end_beep", "machine_end_silence", "machine_end_other", "fax"):
-        # It's a voicemail/machine - hang up immediately
-        logger.info("AMD: Voicemail detected for SID=%s, hanging up", call_sid)
+    if answered_by in ("machine_end_beep", "fax"):
+        # Only hang up on confirmed voicemail beep or fax — machine_start has too many false positives
+        logger.info("AMD: Confirmed voicemail/fax for SID=%s, hanging up", call_sid)
         try:
             client = TwilioClient(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
             client.calls(call_sid).update(status="completed")
         except Exception:
             logger.exception("AMD: Failed to hang up call %s", call_sid)
+    else:
+        logger.info("AMD: AnsweredBy=%s for SID=%s — continuing call (not hanging up)", answered_by, call_sid)
 
     return {"status": "ok"}
 
