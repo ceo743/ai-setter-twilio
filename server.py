@@ -868,7 +868,7 @@ class ConversationManager:
 
     def __init__(self, system_prompt):
         # Force Italian language in system prompt
-        self.system_prompt = system_prompt + "\n\nREGOLE ASSOLUTE:\n1. Rispondi SEMPRE e SOLO in italiano. MAI una parola in inglese.\n2. Rispondi con UNA SOLA frase breve (max 15 parole). Questa e' una TELEFONATA, non un'email.\n3. Dopo ogni frase FERMATI. NON aggiungere domande di follow-up nella stessa risposta.\n4. ASCOLTA la risposta del lead. Approfondisci quello che dice PRIMA di andare avanti.\n5. Se il lead dice qualcosa di interessante, commenta brevemente e poi fai UNA domanda."
+        self.system_prompt = system_prompt + "\n\nREGOLE ASSOLUTE DI BREVITA' (TELEFONATA, NON EMAIL):\n1. MASSIMO 1 frase per risposta. MAI 2 frasi. MAI virgole che allungano.\n2. Massimo 12 parole per risposta. Se superi 12 parole, STAI SBAGLIANDO.\n3. Rispondi SEMPRE e SOLO in italiano.\n4. Dopo ogni risposta FERMATI e ASPETTA. Non aggiungere nulla.\n5. ESEMPI CORRETTI: 'La chiamo per la consulenza con Davide del 2 aprile.' / 'Come mai ha prenotato?' / 'Perfetto, consulenza confermata per domani alle 15.'\n6. ESEMPI SBAGLIATI (troppo lunghi): qualsiasi risposta con piu' di una frase."
         self.messages = []
         self.transcript_log = []  # [(role, text), ...]
 
@@ -884,7 +884,7 @@ class ConversationManager:
                 headers={"Authorization": "Bearer {}".format(GROQ_API_KEY), "Content-Type": "application/json"},
                 json={
                     "model": "llama-3.3-70b-versatile",
-                    "max_tokens": 80,
+                    "max_tokens": 40,
                     "temperature": 0.7,
                     "messages": groq_messages,
                 },
