@@ -884,7 +884,7 @@ class ConversationManager:
                 headers={"Authorization": "Bearer {}".format(GROQ_API_KEY), "Content-Type": "application/json"},
                 json={
                     "model": "llama-3.3-70b-versatile",
-                    "max_tokens": 25,
+                    "max_tokens": 80,
                     "temperature": 0.7,
                     "messages": groq_messages,
                 },
