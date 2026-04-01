@@ -884,7 +884,7 @@ class ConversationManager:
                 headers={"Authorization": "Bearer {}".format(GROQ_API_KEY), "Content-Type": "application/json"},
                 json={
                     "model": "llama-3.3-70b-versatile",
-                    "max_tokens": 40,
+                    "max_tokens": 25,
                     "temperature": 0.7,
                     "messages": groq_messages,
                 },
@@ -1137,7 +1137,7 @@ def handle_media_stream(ws):
     # --- Background thread: process transcripts ---
     def process_transcripts():
         """Read final transcripts, get Claude response, speak it."""
-        buf = ""
+        pending_while_speaking = []  # Accumulate user speech during AI playback
         last_activity = time.time()
         silence_warning_sent = False
         SILENCE_WARNING_SECS = 15  # Ask "mi sente?" after 15s silence
@@ -1155,15 +1155,22 @@ def handle_media_stream(ws):
                 if conversation is None:
                     continue
 
-                # Ignore input while AI is speaking (prevents echo/repeat)
+                # If AI is speaking, accumulate input for later (don't discard)
                 if is_speaking.is_set():
-                    logger.info("Ignoring input while speaking: %s", text)
+                    logger.info("Queuing input while speaking: %s", text)
+                    pending_while_speaking.append(text)
                     continue
 
-                logger.info("Transcript received (is_speaking=OFF): %s", text)
+                # Check if we have pending input from while AI was speaking
+                if pending_while_speaking:
+                    pending_while_speaking.append(text)
+                    user_input = " ".join(pending_while_speaking).strip()
+                    pending_while_speaking.clear()
+                    logger.info("Processing accumulated input: %s", user_input)
+                else:
+                    logger.info("Transcript received (is_speaking=OFF): %s", text)
+                    user_input = text.strip()
 
-                # transcript_q now receives full utterances (buffered until speech_final/UtteranceEnd)
-                user_input = text.strip()
                 if not user_input:
                     continue
 
@@ -1179,22 +1186,22 @@ def handle_media_stream(ws):
                     break
 
             except queue.Empty:
-                # Timeout -- check if there's buffered text
-                if buf:
-                    user_input = buf.strip()
-                    buf = ""
-                    response_text = conversation.get_response(user_input)
-                    speak(response_text)
-                    last_activity = time.time()
+                # Process pending input accumulated while AI was speaking
+                if pending_while_speaking and not is_speaking.is_set() and conversation:
+                    user_input = " ".join(pending_while_speaking).strip()
+                    pending_while_speaking.clear()
+                    if user_input:
+                        logger.info("Processing pending input after speaking ended: %s", user_input)
+                        response_text = conversation.get_response(user_input)
+                        speak(response_text)
+                        last_activity = time.time()
 
-                    # Auto-hangup after farewell
-                    if "buona giornata" in response_text.lower() or "buona serata" in response_text.lower():
-                        logger.info("HANGUP: Detected 'buona giornata' in response, closing call in 3s")
-                        time.sleep(3)
-                        stop_event.set()
-                        break
-
-                    continue
+                        if "buona giornata" in response_text.lower() or "buona serata" in response_text.lower():
+                            logger.info("HANGUP: Detected 'buona giornata' in response, closing call in 3s")
+                            time.sleep(3)
+                            stop_event.set()
+                            break
+                        continue
 
                 # Silence timeout check (only after opening message)
                 if conversation and not is_speaking.is_set():
