@@ -931,7 +931,7 @@ def handle_media_stream(ws):
     dg_ws_container = [None]
 
     dg_url = ("wss://api.deepgram.com/v1/listen"
-              "?model=nova-2-phonecall&language=it&encoding=mulaw&sample_rate=8000"
+              "?model=nova-2&language=it&encoding=mulaw&sample_rate=8000"
               "&channels=1&punctuate=true&interim_results=true"
               "&endpointing=300&utterance_end_ms=1500&vad_events=true")
 
