@@ -741,9 +741,12 @@ pre{{white-space:pre-wrap;word-wrap:break-word;background:#f9f9f9;padding:15px;b
 
 @app.route("/test-response", methods=["POST"])
 def test_response():
-    """Test Groq responses without making a phone call.
+    """Test Groq responses without making a phone call — uses the REAL knowledge_base prompt.
 
     POST JSON with:
+      - nome, data_consulenza, ora_consulenza: lead info
+      - ruolo, acquisizione_clienti, obiettivi_linkedin, usa_linkedin,
+        sito_web, fatturato, budget: Calendly form fields
       - messages: list of {"role": "user"|"assistant", "content": "..."}
       - OR message: single string (shortcut for one user message)
 
@@ -751,10 +754,29 @@ def test_response():
     """
     data = request.json or {}
 
-    # Build conversation manager with test lead data
+    # Build prompt using the REAL knowledge_base (same as actual calls)
     nome = data.get("nome", "Marco")
-    data_consulenza = data.get("data_consulenza", "2 aprile 2026 alle 15:00")
-    prompt = get_setter_prompt(lead_name=nome, appointment_date=data_consulenza)
+    data_consulenza = data.get("data_consulenza", "2 aprile 2026")
+    ora_consulenza = data.get("ora_consulenza", "15:00")
+
+    prompt = get_knowledge_prompt(
+        lead_name=nome,
+        appointment_date=data_consulenza,
+        appointment_time=ora_consulenza,
+    )
+
+    # Append Calendly form data (same as WebSocket handler)
+    ruolo = data.get("ruolo", "")
+    if ruolo:
+        prompt += "\n## RISPOSTE FORM CALENDLY (il lead ha gia' compilato queste info)"
+        prompt += "\n- Ruolo: {}".format(ruolo)
+        prompt += "\n- Come acquisisce clienti: {}".format(data.get("acquisizione_clienti", ""))
+        prompt += "\n- Obiettivi LinkedIn: {}".format(data.get("obiettivi_linkedin", ""))
+        prompt += "\n- Usa gia' LinkedIn: {}".format(data.get("usa_linkedin", ""))
+        prompt += "\n- Sito web: {}".format(data.get("sito_web", ""))
+        prompt += "\n- Fatturato azienda: {}".format(data.get("fatturato", ""))
+        prompt += "\n- Budget disponibile: {}".format(data.get("budget", ""))
+
     conv = ConversationManager(prompt)
 
     # Support single message or conversation
@@ -786,6 +808,8 @@ def test_response():
     return jsonify({
         "responses": responses,
         "total_turns": len(responses),
+        "prompt_used": "knowledge_base",
+        "form_data": bool(ruolo),
     })
 
 
