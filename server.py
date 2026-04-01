@@ -950,6 +950,8 @@ def handle_media_stream(ws):
     last_audio_sent_to_dg = [0.0]
 
     # Background thread: read Deepgram results (blocking recv, no timeout)
+    partial_buf = []  # Buffer is_final transcripts until speech_final or UtteranceEnd
+
     def read_deepgram():
         consecutive_errors = 0
         while not stop_event.is_set():
@@ -973,9 +975,21 @@ def handle_media_stream(ws):
                     if is_final and transcript:
                         logger.info("Deepgram transcript (is_final=%s speech_final=%s): %s",
                                     is_final, speech_final, transcript)
-                        transcript_q.put(transcript)
+                        # Buffer partial transcripts, only send on speech_final
+                        partial_buf.append(transcript)
+                        if speech_final:
+                            full_text = " ".join(partial_buf)
+                            partial_buf.clear()
+                            transcript_q.put(full_text)
+                            logger.info("Full utterance ready: %s", full_text)
                 elif msg_type == "UtteranceEnd":
                     logger.info("Deepgram UtteranceEnd received")
+                    # Flush any buffered partials on UtteranceEnd
+                    if partial_buf:
+                        full_text = " ".join(partial_buf)
+                        partial_buf.clear()
+                        transcript_q.put(full_text)
+                        logger.info("Utterance flushed on UtteranceEnd: %s", full_text)
                 elif msg_type == "SpeechStarted":
                     logger.info("Deepgram SpeechStarted detected")
                 elif msg_type == "Metadata":
@@ -1148,25 +1162,10 @@ def handle_media_stream(ws):
 
                 logger.info("Transcript received (is_speaking=OFF): %s", text)
 
-                if buf:
-                    buf = "{} {}".format(buf, text)
-                else:
-                    buf = text
-
-                # Drain any additional quickly-arriving segments
-                time.sleep(0.3)
-                while not transcript_q.empty():
-                    try:
-                        extra = transcript_q.get_nowait()
-                        buf = "{} {}".format(buf, extra)
-                    except queue.Empty:
-                        break
-
-                if not buf:
+                # transcript_q now receives full utterances (buffered until speech_final/UtteranceEnd)
+                user_input = text.strip()
+                if not user_input:
                     continue
-
-                user_input = buf.strip()
-                buf = ""
 
                 response_text = conversation.get_response(user_input)
                 speak(response_text)
