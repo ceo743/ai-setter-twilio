@@ -836,7 +836,7 @@ def test_response():
 
 @app.route("/health", methods=["GET"])
 def health():
-    return {"status": "ok", "version": "v6.10-date-format-fix"}
+    return {"status": "ok", "version": "v6.11-obiettivi-form"}
 
 
 @app.route("/dashboard", methods=["GET"])
@@ -1039,7 +1039,7 @@ FASE 3 - DISCOVERY (una domanda alla volta, FERMATI e ascolta)
 - "Come ci ha conosciuto?" — Ascolta, commenta brevemente
 - Se hai info dal sito web: "Ho dato un'occhiata al vostro sito e ho visto che vi occupate di [settore]. E' corretto?" Se NO: "Mi racconta brevemente di cosa si occupa?"
 - "Chi e' il suo cliente ideale? A che tipo di aziende si rivolge?" (SALTA se lo sai gia' dal sito o dalla risposta precedente)
-- "Come mai ha deciso di prenotare?" — Ascolta DAVVERO, rispondi a quello che dice
+- Se hai gli obiettivi dal form: "Ho visto che ha indicato che vorrebbe {obiettivi}. Come mai ha deciso di prenotare la consulenza?" Se NO: "Come mai ha deciso di prenotare?" — Ascolta DAVVERO, rispondi a quello che dice
 - "Lavora solo nella sua zona o anche a livello nazionale?" — LinkedIn funziona MEGLIO per chi ha un raggio almeno regionale o nazionale. Se lavora solo in un paesino o zona molto ristretta, chiudi: "Le dico la verita', LinkedIn funziona meglio per chi lavora almeno a livello regionale. Per la sua situazione le abbiamo mandato risorse via email. Buona giornata!"
 - Se hai il budget dal form: "Ho visto che ha indicato {budget} come investimento potenziale. E' lei che prende la decisione o deve confrontarsi con qualcuno?"
   Se NON hai il budget: "Se Davide le propone un percorso, e' lei che decide o deve sentire qualcun altro?"
