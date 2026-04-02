@@ -836,7 +836,7 @@ def test_response():
 
 @app.route("/health", methods=["GET"])
 def health():
-    return {"status": "ok", "version": "v6.18-noise-reduction"}
+    return {"status": "ok", "version": "v6.19-voice-marin"}
 
 
 @app.route("/dashboard", methods=["GET"])
@@ -1392,7 +1392,7 @@ def handle_media_stream(ws):
                     "session": {
                         "modalities": ["text", "audio"],
                         "instructions": system_prompt,
-                        "voice": "coral",
+                        "voice": "marin",
                         "input_audio_format": "g711_ulaw",
                         "output_audio_format": "g711_ulaw",
                         "input_audio_noise_reduction": {"type": "near_field"},
