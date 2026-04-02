@@ -836,7 +836,7 @@ def test_response():
 
 @app.route("/health", methods=["GET"])
 def health():
-    return {"status": "ok", "version": "v6-openai-guidelines"}
+    return {"status": "ok", "version": "v6.1-opening-gate"}
 
 
 @app.route("/dashboard", methods=["GET"])
@@ -1093,8 +1093,9 @@ def handle_media_stream(ws):
     response_start_timestamp = [None]
     latest_media_timestamp = [0]
 
-    # Gate: don't forward audio to OpenAI until opening message starts playing
-    opening_audio_started = threading.Event()
+    # Gate: don't forward audio or handle barge-in until opening message is FULLY DONE.
+    # "Pronto" from the lead during the opening is normal — not an interruption.
+    opening_complete = threading.Event()
 
     # Queue for messages TO OpenAI (main thread -> openai_thread)
     openai_send_queue = queue.Queue()
@@ -1203,12 +1204,8 @@ def handle_media_stream(ws):
                         "streamSid": stream_sid,
                         "media": {"payload": delta},
                     })
-                    if not opening_audio_started.is_set():
-                        opening_audio_started.set()
-                        logger.info("Opening audio started — user audio enabled")
                     if response_start_timestamp[0] is None:
                         response_start_timestamp[0] = latest_media_timestamp[0]
-                    # Response is being generated — clear the waiting flag
                     waiting_for_response[0] = False
                 item_id = event.get("item_id", "")
                 if item_id:
@@ -1248,8 +1245,8 @@ def handle_media_stream(ws):
                 waiting_for_response[0] = True
 
             elif event_type == "input_audio_buffer.speech_started":
-                if not opening_audio_started.is_set():
-                    logger.info("Speech before opening — ignored")
+                if not opening_complete.is_set():
+                    logger.info("Speech during opening — ignored (normal 'pronto')")
                     continue
                 logger.info("Barge-in: user speaking")
                 if stream_sid:
@@ -1286,6 +1283,10 @@ def handle_media_stream(ws):
                     logger.info("Response cancelled (barge-in)")
                 response_start_timestamp[0] = None
                 waiting_for_response[0] = False
+                # Open the gate after the FIRST response (opening) is done
+                if not opening_complete.is_set():
+                    opening_complete.set()
+                    logger.info("Opening complete — now accepting user audio and barge-in")
 
             elif event_type == "error":
                 err = event.get("error", {})
@@ -1352,7 +1353,7 @@ def handle_media_stream(ws):
                     "session": {
                         "modalities": ["text", "audio"],
                         "instructions": system_prompt,
-                        "voice": "ash",
+                        "voice": "coral",
                         "input_audio_format": "g711_ulaw",
                         "output_audio_format": "g711_ulaw",
                         "input_audio_transcription": {"model": "whisper-1"},
@@ -1387,7 +1388,7 @@ def handle_media_stream(ws):
                 timestamp = int(data["media"].get("timestamp", "0"))
                 latest_media_timestamp[0] = timestamp
 
-                if session_configured and opening_audio_started.is_set():
+                if session_configured and opening_complete.is_set():
                     send_to_openai({
                         "type": "input_audio_buffer.append",
                         "audio": payload,
