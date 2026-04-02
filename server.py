@@ -836,7 +836,7 @@ def test_response():
 
 @app.route("/health", methods=["GET"])
 def health():
-    return {"status": "ok", "version": "v6.22-voice-coral"}
+    return {"status": "ok", "version": "v6.28-temp-0.9"}
 
 
 @app.route("/dashboard", methods=["GET"])
@@ -1401,7 +1401,7 @@ def handle_media_stream(ws):
                             "type": "semantic_vad",
                             "eagerness": "low",
                         },
-                        "temperature": 0.8,
+                        "temperature": 0.9,
                         "max_response_output_tokens": "inf",
                     },
                 })
