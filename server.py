@@ -78,7 +78,7 @@ for _key_name in ["GROQ_API_KEY"]:
         print("  {} = {}...".format(_key_name, _val[:15]))
 
 # OpenAI Realtime API
-OPENAI_REALTIME_URL = "wss://api.openai.com/v1/realtime?model=gpt-4o-realtime-preview-2025-06-03"
+OPENAI_REALTIME_URL = "wss://api.openai.com/v1/realtime?model=gpt-realtime"
 
 # ---------------------------------------------------------------------------
 # Logging
@@ -836,7 +836,7 @@ def test_response():
 
 @app.route("/health", methods=["GET"])
 def health():
-    return {"status": "ok", "version": "v6.19-voice-marin"}
+    return {"status": "ok", "version": "v6.20-gpt-realtime"}
 
 
 @app.route("/dashboard", methods=["GET"])
