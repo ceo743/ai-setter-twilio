@@ -836,7 +836,7 @@ def test_response():
 
 @app.route("/health", methods=["GET"])
 def health():
-    return {"status": "ok", "version": "v6.5-lead-last-speaker"}
+    return {"status": "ok", "version": "v6.6-no-token-limit"}
 
 
 @app.route("/dashboard", methods=["GET"])
@@ -1386,7 +1386,7 @@ def handle_media_stream(ws):
                             "silence_duration_ms": 800,
                         },
                         "temperature": 0.8,
-                        "max_response_output_tokens": 250,
+                        "max_response_output_tokens": "inf",
                     },
                 })
                 session_configured = True
