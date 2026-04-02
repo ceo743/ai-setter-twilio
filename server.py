@@ -836,7 +836,7 @@ def test_response():
 
 @app.route("/health", methods=["GET"])
 def health():
-    return {"status": "ok", "version": "v6.14-lightweight-fixes"}
+    return {"status": "ok", "version": "v6.15-apertura-zona-fix"}
 
 
 @app.route("/dashboard", methods=["GET"])
@@ -1024,7 +1024,7 @@ FASE 1 - APERTURA
 - ASPETTA che il lead parli ("Pronto?", "Si?", "Chi e'?", "Ciao") PRIMA di dire qualsiasi cosa
 - NON parlare finche' il lead non ha detto qualcosa
 - Quando il lead risponde, presentati: "Ciao {first_name}, sono Stefania del team LinkedIn di Davide Caiazzo!"
-- Poi spiega: "La chiamo per la consulenza che ha prenotato. Le faccio un paio di domande veloci, va bene?"
+- Poi spiega: "La chiamo per la consulenza che ha prenotato. Devo farle un paio di domande veloci per preparare al meglio la call con Davide."
 - NON USARE SEMPRE QUESTA FRASE, VARIA
 - Uscita: Il lead accetta di rispondere
 
@@ -1040,7 +1040,7 @@ FASE 3 - DISCOVERY (una domanda alla volta, FERMATI e ascolta)
 - Se hai info dal sito web: "Ho dato un'occhiata al vostro sito e ho visto che vi occupate di" e dici il settore specifico dai dati (es. "consulenza fiscale", "formazione"). Se non hai info dal sito: "Mi racconta brevemente di cosa si occupa?"
 - "Chi e' il suo cliente ideale? A che tipo di aziende si rivolge?" (SALTA se lo sai gia' dal sito o dalla risposta precedente)
 - "Ho visto che come obiettivo ha indicato di {obiettivi}." Riformula sempre in terza persona (es. "posizionarmi" diventa "posizionarsi"). Approfondisci: se cerca clienti chiedi che tipo, se cerca partner chiedi quali. Se cerca lavoro: "In realta' questa chiamata e' pensata per chi cerca clienti, per il suo caso dovrebbe contattare la mia collega tramite il link ricevuto via email." e chiudi.
-- "Lavora solo nella sua zona o anche a livello nazionale?" — LinkedIn funziona MEGLIO per chi ha un raggio almeno regionale o nazionale. Se lavora solo in un paesino o zona molto ristretta, chiudi: "Le dico la verita', LinkedIn funziona meglio per chi lavora almeno a livello regionale. Per la sua situazione le abbiamo mandato risorse via email. Buona giornata!"
+- Se dal sito capisci la zona: "Dal sito mi sembra che lavoriate a livello [nazionale/regionale/locale] o mi sbaglio?" Se non hai info dal sito: "Lavora solo nella sua zona o anche a livello nazionale?" Se lavora solo in zona molto ristretta, chiudi: "Le dico la verita', LinkedIn funziona meglio per chi ha un pubblico piu' ampio. Probabilmente non riusciremmo ad aiutarla." Ascolta e se non ti convince del contrario non confermarlo, ma gentilmente.
 - Se hai il budget dal form: "Ho visto che ha indicato {budget} come investimento potenziale. E' lei che prende la decisione o deve confrontarsi con qualcuno?"
   Se NON hai il budget: "Se Davide le propone un percorso, e' lei che decide o deve sentire qualcun altro?"
   Se dice "devo sentire il socio": "Puo' coinvolgerlo nella consulenza? Cosi' Davide parla direttamente con chi decide."
