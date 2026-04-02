@@ -836,7 +836,7 @@ def test_response():
 
 @app.route("/health", methods=["GET"])
 def health():
-    return {"status": "ok", "version": "v6.15-apertura-zona-fix"}
+    return {"status": "ok", "version": "v6.16-vad-threshold"}
 
 
 @app.route("/dashboard", methods=["GET"])
@@ -1398,8 +1398,8 @@ def handle_media_stream(ws):
                         "input_audio_transcription": {"model": "whisper-1"},
                         "turn_detection": {
                             "type": "server_vad",
-                            "threshold": 0.5,
-                            "prefix_padding_ms": 300,
+                            "threshold": 0.7,
+                            "prefix_padding_ms": 500,
                             "silence_duration_ms": 800,
                         },
                         "temperature": 0.8,
