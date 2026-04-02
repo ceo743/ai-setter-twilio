@@ -836,7 +836,7 @@ def test_response():
 
 @app.route("/health", methods=["GET"])
 def health():
-    return {"status": "ok", "version": "v6.4-smart-hangup"}
+    return {"status": "ok", "version": "v6.5-lead-last-speaker"}
 
 
 @app.route("/dashboard", methods=["GET"])
@@ -1086,6 +1086,8 @@ def handle_media_stream(ws):
     lead_data = None
     stop_event = threading.Event()
     farewell_detected = [False]
+    farewell_complete = [False]  # True after farewell response.done
+    hangup_timer = [None]  # fallback timer reference
     transcript_log = []  # [(role, text), ...]
     ws_send_lock = threading.Lock()
 
@@ -1274,6 +1276,15 @@ def handle_media_stream(ws):
 
             elif event_type == "input_audio_buffer.speech_stopped":
                 logger.info("User speech stopped")
+                # After farewell is complete, lead's goodbye = last speaker → close
+                if farewell_complete[0]:
+                    logger.info("HANGUP: lead spoke after farewell — closing in 3s")
+                    if hangup_timer[0]:
+                        hangup_timer[0].cancel()
+                    t = threading.Timer(3.0, lambda: stop_event.set())
+                    t.daemon = True
+                    t.start()
+                    hangup_timer[0] = t
 
             elif event_type == "response.done":
                 resp = event.get("response", {})
@@ -1284,13 +1295,27 @@ def handle_media_stream(ws):
                     logger.info("Response cancelled (barge-in)")
                 response_start_timestamp[0] = None
                 waiting_for_response[0] = False
+                # After farewell response completes: block new responses, start fallback
+                if farewell_detected[0] and st == "completed":
+                    farewell_complete[0] = True
+                    logger.info("HANGUP: farewell response done — waiting for lead goodbye (15s fallback)")
+                    t = threading.Timer(15.0, lambda: stop_event.set())
+                    t.daemon = True
+                    t.start()
+                    hangup_timer[0] = t
 
             elif event_type == "error":
                 err = event.get("error", {})
                 logger.error("OpenAI error: %s %s %s", err.get("type", ""), err.get("code", ""), err.get("message", ""))
 
+            elif event_type == "response.created":
+                # Block new responses after farewell — Stefania should NOT talk after goodbye
+                if farewell_complete[0]:
+                    logger.info("Blocking post-farewell response")
+                    send_to_openai({"type": "response.cancel"})
+
             elif event_type not in (
-                "response.created", "response.output_item.added", "response.output_item.done",
+                "response.output_item.added", "response.output_item.done",
                 "response.content_part.added", "response.content_part.done",
                 "response.audio_transcript.delta", "conversation.item.created",
                 "rate_limits.updated",
@@ -1392,13 +1417,7 @@ def handle_media_stream(ws):
                     })
 
             elif event == "mark":
-                mark_name = data.get("mark", {}).get("name", "")
-                if mark_name == "ai-done" and farewell_detected[0]:
-                    logger.info("HANGUP: audio finished after farewell — closing in 5s")
-                    def _hangup():
-                        time.sleep(5)
-                        stop_event.set()
-                    threading.Thread(target=_hangup, daemon=True).start()
+                pass  # marks handled silently
 
             elif event == "stop":
                 logger.info("Stream stopped")
