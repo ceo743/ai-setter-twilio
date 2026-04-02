@@ -836,7 +836,7 @@ def test_response():
 
 @app.route("/health", methods=["GET"])
 def health():
-    return {"status": "ok", "version": "v6.1-opening-gate"}
+    return {"status": "ok", "version": "v6.2-hangup-fix"}
 
 
 @app.route("/dashboard", methods=["GET"])
@@ -1223,9 +1223,11 @@ def handle_media_stream(ws):
                     transcript_log.append(("Stefania", transcript))
                     lower = transcript.lower()
                     if "buona giornata" in lower or "buona serata" in lower or "in bocca al lupo" in lower:
-                        logger.info("HANGUP: farewell detected, closing in 5s")
+                        # Wait 15s — the audio takes much longer to play on Twilio
+                        # than the transcript takes to arrive from OpenAI
+                        logger.info("HANGUP: farewell detected, closing in 15s (waiting for audio to finish)")
                         def _hangup():
-                            time.sleep(5)
+                            time.sleep(15)
                             stop_event.set()
                         threading.Thread(target=_hangup, daemon=True).start()
 
