@@ -836,7 +836,7 @@ def test_response():
 
 @app.route("/health", methods=["GET"])
 def health():
-    return {"status": "ok", "version": "v6.17-semantic-vad"}
+    return {"status": "ok", "version": "v6.18-noise-reduction"}
 
 
 @app.route("/dashboard", methods=["GET"])
@@ -1395,6 +1395,7 @@ def handle_media_stream(ws):
                         "voice": "coral",
                         "input_audio_format": "g711_ulaw",
                         "output_audio_format": "g711_ulaw",
+                        "input_audio_noise_reduction": {"type": "near_field"},
                         "input_audio_transcription": {"model": "whisper-1"},
                         "turn_detection": {
                             "type": "semantic_vad",
