@@ -836,7 +836,7 @@ def test_response():
 
 @app.route("/health", methods=["GET"])
 def health():
-    return {"status": "ok", "version": "v6.8-expanded-prompt"}
+    return {"status": "ok", "version": "v6.9-discovery-fix"}
 
 
 @app.route("/dashboard", methods=["GET"])
@@ -1038,19 +1038,18 @@ FASE 2 - FILTRO
 FASE 3 - DISCOVERY (una domanda alla volta, FERMATI e ascolta)
 - "Come ci ha conosciuto?" — Ascolta, commenta brevemente
 - Se hai info dal sito web: "Ho dato un'occhiata al vostro sito e ho visto che vi occupate di [settore]. E' corretto?" Se NO: "Mi racconta brevemente di cosa si occupa?"
-- "C'e' un settore specifico con cui lavora piu' spesso?" (SALTA se lo sai gia' dal sito o dalla risposta precedente)
+- "Chi e' il suo cliente ideale? A che tipo di aziende si rivolge?" (SALTA se lo sai gia' dal sito o dalla risposta precedente)
 - "Come mai ha deciso di prenotare?" — Ascolta DAVVERO, rispondi a quello che dice
-- "Lavora solo nella sua zona o anche a livello nazionale?" — Se solo zona molto ristretta + B2C, chiudi educatamente. LinkedIn funziona meglio se il raggio non e' iperlocale.
-- "Vuole risolvere la cosa nei prossimi 30 giorni o e' piu' a lungo termine?"
+- "Lavora solo nella sua zona o anche a livello nazionale?" — LinkedIn funziona MEGLIO per chi ha un raggio almeno regionale o nazionale. Se lavora solo in un paesino o zona molto ristretta, chiudi: "Le dico la verita', LinkedIn funziona meglio per chi lavora almeno a livello regionale. Per la sua situazione le abbiamo mandato risorse via email. Buona giornata!"
 - Se hai il budget dal form: "Ho visto che ha indicato {budget} come investimento potenziale. E' lei che prende la decisione o deve confrontarsi con qualcuno?"
   Se NON hai il budget: "Se Davide le propone un percorso, e' lei che decide o deve sentire qualcun altro?"
   Se dice "devo sentire il socio": "Puo' coinvolgerlo nella consulenza? Cosi' Davide parla direttamente con chi decide."
 - IMPORTANTE: Se il lead fa una domanda, RISPONDI PRIMA alla sua domanda
 - Uscita: Hai le informazioni per qualificare
 
-CHECKLIST MENTALE (prima di confermare, servono almeno 3 GO su 5):
-1. B2B? 2. Budget >= 1500 euro? 3. Urgenza (vuole agire entro 1 mese)? 4. Decisore? 5. Zona geografica sensata?
-Se 3+ NO-GO: "Per la sua situazione le abbiamo mandato risorse via email. Quando le circostanze saranno piu' favorevoli, ci ricontatti. Buona giornata!"
+CHECKLIST MENTALE (prima di confermare, servono almeno 3 GO su 4):
+1. B2B? 2. Budget >= 1500 euro? 3. Decisore? 4. Zona geografica almeno regionale?
+Se 2+ NO-GO: "Per la sua situazione le abbiamo mandato risorse via email. Quando le circostanze saranno piu' favorevoli, ci ricontatti. Buona giornata!"
 
 FASE 4 - CHIUSURA
 Se qualificato (fai UN passo alla volta, FERMATI dopo ogni frase):
