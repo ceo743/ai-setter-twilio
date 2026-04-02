@@ -28,7 +28,7 @@ from flask_sock import Sock
 from twilio.rest import Client as TwilioClient
 from twilio.twiml.voice_response import Connect, VoiceResponse
 
-from knowledge_base import get_knowledge_prompt, check_lead_prefilter, _format_time_spoken
+from knowledge_base import get_knowledge_prompt, check_lead_prefilter, _format_time_spoken, _format_date_spoken, _extract_time_from_iso
 from setter_prompt import get_setter_prompt
 import re
 
@@ -528,8 +528,8 @@ def calendly_webhook():
             "cognome": invitee.get("last_name", ""),
             "email": invitee.get("email", ""),
             "cellulare": to_number,
-            "data_consulenza": event.get("start_time", ""),
-            "ora_consulenza": event.get("start_time", ""),
+            "data_consulenza": _format_date_spoken(event.get("start_time", "")),
+            "ora_consulenza": _extract_time_from_iso(event.get("start_time", "")),
             "meeting_link": meeting_link,
         }
 
@@ -836,7 +836,7 @@ def test_response():
 
 @app.route("/health", methods=["GET"])
 def health():
-    return {"status": "ok", "version": "v6.9-discovery-fix"}
+    return {"status": "ok", "version": "v6.10-date-format-fix"}
 
 
 @app.route("/dashboard", methods=["GET"])

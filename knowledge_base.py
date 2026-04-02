@@ -257,6 +257,66 @@ def _format_time_spoken(time_str):
         return "alle {}".format(time_str)
 
 
+def _format_date_spoken(date_str):
+    """Converte data in italiano parlato naturale.
+    '2026-04-28T08:00:00.000000Z' -> '28 aprile'
+    '2 aprile 2026' -> '2 aprile'  (passthrough)
+    '2026-04-02' -> '2 aprile'
+    """
+    if not date_str:
+        return ""
+    mesi = {
+        1: "gennaio", 2: "febbraio", 3: "marzo", 4: "aprile",
+        5: "maggio", 6: "giugno", 7: "luglio", 8: "agosto",
+        9: "settembre", 10: "ottobre", 11: "novembre", 12: "dicembre",
+    }
+    try:
+        from datetime import datetime, timezone, timedelta
+        clean = date_str.strip()
+        # Try ISO format first (from Calendly)
+        for fmt in ("%Y-%m-%dT%H:%M:%S.%fZ", "%Y-%m-%dT%H:%M:%SZ", "%Y-%m-%dT%H:%M:%S", "%Y-%m-%d"):
+            try:
+                dt = datetime.strptime(clean, fmt)
+                # Convert UTC to Rome time (UTC+1 or UTC+2 for DST)
+                if clean.endswith("Z"):
+                    dt = dt.replace(tzinfo=timezone.utc) + timedelta(hours=2)
+                return "{} {}".format(dt.day, mesi[dt.month])
+            except ValueError:
+                continue
+        # Already in Italian format like "2 aprile 2026" — strip year
+        for m_name in mesi.values():
+            if m_name in clean.lower():
+                # Remove year (4 digits at end)
+                import re
+                return re.sub(r'\s*\d{4}\s*$', '', clean).strip()
+        return clean
+    except Exception:
+        return date_str
+
+
+def _extract_time_from_iso(date_str):
+    """Estrae orario HH:MM da un timestamp ISO.
+    '2026-04-28T08:00:00.000000Z' -> '10:00'  (UTC+2)
+    '15:00' -> '15:00'  (passthrough)
+    """
+    if not date_str:
+        return ""
+    try:
+        from datetime import datetime, timezone, timedelta
+        clean = date_str.strip()
+        for fmt in ("%Y-%m-%dT%H:%M:%S.%fZ", "%Y-%m-%dT%H:%M:%SZ", "%Y-%m-%dT%H:%M:%S"):
+            try:
+                dt = datetime.strptime(clean, fmt)
+                if clean.endswith("Z"):
+                    dt = dt.replace(tzinfo=timezone.utc) + timedelta(hours=2)
+                return "{:02d}:{:02d}".format(dt.hour, dt.minute)
+            except ValueError:
+                continue
+        return clean
+    except Exception:
+        return date_str
+
+
 # B2C keywords for pre-filtering (Python-level, not LLM-level)
 B2C_KEYWORDS = [
     "parrucchiere", "parrucchiera", "salone", "estetista", "centro estetico",
