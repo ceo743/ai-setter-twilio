@@ -836,7 +836,7 @@ def test_response():
 
 @app.route("/health", methods=["GET"])
 def health():
-    return {"status": "ok", "version": "v6.24-prompt-slim"}
+    return {"status": "ok", "version": "v6.25-transcribe-upgrade"}
 
 
 @app.route("/dashboard", methods=["GET"])
@@ -1381,13 +1381,17 @@ def handle_media_stream(ws):
                         "input_audio_format": "g711_ulaw",
                         "output_audio_format": "g711_ulaw",
                         "input_audio_noise_reduction": {"type": "near_field"},
-                        "input_audio_transcription": {"model": "whisper-1"},
+                        "input_audio_transcription": {
+                            "model": "gpt-4o-mini-transcribe",
+                            "language": "it",
+                            "prompt": "LinkedIn, Davide Caiazzo, DC Academy, Google Meet, consulenza, coaching, gestione, prequalifica",
+                        },
                         "turn_detection": {
                             "type": "semantic_vad",
                             "eagerness": "low",
                         },
                         "temperature": 0.8,
-                        "max_response_output_tokens": "inf",
+                        "max_response_output_tokens": 200,
                     },
                 })
                 session_configured = True
