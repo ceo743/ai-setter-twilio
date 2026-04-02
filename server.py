@@ -78,7 +78,7 @@ for _key_name in ["GROQ_API_KEY"]:
         print("  {} = {}...".format(_key_name, _val[:15]))
 
 # OpenAI Realtime API
-OPENAI_REALTIME_URL = "wss://api.openai.com/v1/realtime?model=gpt-4o-realtime-preview-2024-12-17"
+OPENAI_REALTIME_URL = "wss://api.openai.com/v1/realtime?model=gpt-4o-realtime-preview-2025-06-03"
 
 # ---------------------------------------------------------------------------
 # Logging
@@ -836,7 +836,7 @@ def test_response():
 
 @app.route("/health", methods=["GET"])
 def health():
-    return {"status": "ok", "version": "v6.16-vad-threshold"}
+    return {"status": "ok", "version": "v6.17-semantic-vad"}
 
 
 @app.route("/dashboard", methods=["GET"])
@@ -1397,10 +1397,8 @@ def handle_media_stream(ws):
                         "output_audio_format": "g711_ulaw",
                         "input_audio_transcription": {"model": "whisper-1"},
                         "turn_detection": {
-                            "type": "server_vad",
-                            "threshold": 0.7,
-                            "prefix_padding_ms": 500,
-                            "silence_duration_ms": 800,
+                            "type": "semantic_vad",
+                            "eagerness": "low",
                         },
                         "temperature": 0.8,
                         "max_response_output_tokens": "inf",
