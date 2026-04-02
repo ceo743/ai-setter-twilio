@@ -836,7 +836,7 @@ def test_response():
 
 @app.route("/health", methods=["GET"])
 def health():
-    return {"status": "ok", "version": "v6.6-no-token-limit"}
+    return {"status": "ok", "version": "v6.7-wait-for-pronto"}
 
 
 @app.route("/dashboard", methods=["GET"])
@@ -1019,10 +1019,11 @@ Se l'audio del lead non e' chiaro (rumore di fondo, silenzio, incomprensibile), 
 
 ## FLUSSO CONVERSAZIONE
 
-FASE 1 - DOPO IL SALUTO
-- Goal: Spiegare perche' chiami e ottenere il permesso di fare domande
-- Quando il lead risponde "pronto", "si", "ciao", rispondi:
-- "Piacere! La chiamo per la consulenza con Davide che ha prenotato. Le faccio un paio di domande veloci per prepararle una strategia su misura, va bene?"
+FASE 1 - APERTURA
+- ASPETTA che il lead parli ("Pronto?", "Si?", "Chi e'?", "Ciao") PRIMA di dire qualsiasi cosa
+- NON parlare finche' il lead non ha detto qualcosa
+- Quando il lead risponde, presentati: "Ciao {first_name}, sono Stefania del team LinkedIn di Davide Caiazzo!"
+- Poi spiega: "La chiamo per la consulenza che ha prenotato. Le faccio un paio di domande veloci, va bene?"
 - NON USARE SEMPRE QUESTA FRASE, VARIA
 - Uscita: Il lead accetta di rispondere
 
@@ -1392,25 +1393,15 @@ def handle_media_stream(ws):
                 session_configured = True
                 logger.info("Session configured (%d chars prompt)", len(system_prompt))
 
-                # Opening greeting — ONLY the greeting, then STOP and wait for lead
-                send_to_openai({
-                    "type": "conversation.item.create",
-                    "item": {
-                        "type": "message",
-                        "role": "user",
-                        "content": [{"type": "input_text",
-                            "text": "Il lead ha appena risposto al telefono. Di' SOLO: 'Ciao {}, sono Stefania del team LinkedIn di Davide Caiazzo!' e poi FERMATI. Non aggiungere altro. Aspetta che il lead risponda.".format(first_name)}],
-                    },
-                })
-                send_to_openai({"type": "response.create"})
-                logger.info("Opening triggered for: %s", first_name)
+                # No manual opening — prompt tells Stefania to wait for lead's "Pronto?"
+                logger.info("Session ready — waiting for lead to speak (%s)", first_name)
 
             elif event == "media":
                 payload = data["media"]["payload"]
                 timestamp = int(data["media"].get("timestamp", "0"))
                 latest_media_timestamp[0] = timestamp
 
-                if session_configured and opening_audio_started.is_set():
+                if session_configured:
                     send_to_openai({
                         "type": "input_audio_buffer.append",
                         "audio": payload,
