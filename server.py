@@ -836,7 +836,7 @@ def test_response():
 
 @app.route("/health", methods=["GET"])
 def health():
-    return {"status": "ok", "version": "v6.29-eagerness-medium-temp08"}
+    return {"status": "ok", "version": "v6.22-voice-coral"}
 
 
 @app.route("/dashboard", methods=["GET"])
@@ -1399,7 +1399,7 @@ def handle_media_stream(ws):
                         "input_audio_transcription": {"model": "whisper-1"},
                         "turn_detection": {
                             "type": "semantic_vad",
-                            "eagerness": "medium",
+                            "eagerness": "low",
                         },
                         "temperature": 0.8,
                         "max_response_output_tokens": "inf",
