@@ -836,7 +836,7 @@ def test_response():
 
 @app.route("/health", methods=["GET"])
 def health():
-    return {"status": "ok", "version": "v6.3-coral-hangup"}
+    return {"status": "ok", "version": "v6.4-smart-hangup"}
 
 
 @app.route("/dashboard", methods=["GET"])
@@ -1085,6 +1085,7 @@ def handle_media_stream(ws):
     stream_sid = None
     lead_data = None
     stop_event = threading.Event()
+    farewell_detected = [False]
     transcript_log = []  # [(role, text), ...]
     ws_send_lock = threading.Lock()
 
@@ -1226,11 +1227,8 @@ def handle_media_stream(ws):
                     transcript_log.append(("Stefania", transcript))
                     lower = transcript.lower()
                     if "buona giornata" in lower or "buona serata" in lower or "in bocca al lupo" in lower:
-                        logger.info("HANGUP: farewell detected, closing in 15s")
-                        def _hangup():
-                            time.sleep(15)
-                            stop_event.set()
-                        threading.Thread(target=_hangup, daemon=True).start()
+                        logger.info("HANGUP: farewell detected — waiting for audio to finish")
+                        farewell_detected[0] = True
 
             elif event_type == "conversation.item.input_audio_transcription.completed":
                 transcript = event.get("transcript", "")
@@ -1394,7 +1392,13 @@ def handle_media_stream(ws):
                     })
 
             elif event == "mark":
-                pass  # marks handled silently
+                mark_name = data.get("mark", {}).get("name", "")
+                if mark_name == "ai-done" and farewell_detected[0]:
+                    logger.info("HANGUP: audio finished after farewell — closing in 5s")
+                    def _hangup():
+                        time.sleep(5)
+                        stop_event.set()
+                    threading.Thread(target=_hangup, daemon=True).start()
 
             elif event == "stop":
                 logger.info("Stream stopped")
