@@ -836,7 +836,7 @@ def test_response():
 
 @app.route("/health", methods=["GET"])
 def health():
-    return {"status": "ok", "version": "v6.12-obiettivi-diretto"}
+    return {"status": "ok", "version": "v6.14-lightweight-fixes"}
 
 
 @app.route("/dashboard", methods=["GET"])
@@ -1037,13 +1037,9 @@ FASE 2 - FILTRO
 
 FASE 3 - DISCOVERY (una domanda alla volta, FERMATI e ascolta)
 - "Come ci ha conosciuto?" — Ascolta, commenta brevemente
-- SOLO se nella sezione CONTESTO sopra ci sono informazioni dal sito web: "Ho dato un'occhiata al vostro sito e ho visto che vi occupate di" e poi dici il settore specifico (es. "abbigliamento", "consulenza fiscale"). NON dire MAI la parola "settore" e NON dire MAI "[settore]". Se NON hai info dal sito web nella sezione CONTESTO, chiedi direttamente: "Mi racconta brevemente di cosa si occupa?"
+- Se hai info dal sito web: "Ho dato un'occhiata al vostro sito e ho visto che vi occupate di" e dici il settore specifico dai dati (es. "consulenza fiscale", "formazione"). Se non hai info dal sito: "Mi racconta brevemente di cosa si occupa?"
 - "Chi e' il suo cliente ideale? A che tipo di aziende si rivolge?" (SALTA se lo sai gia' dal sito o dalla risposta precedente)
-- "Ho visto che come obiettivo ha {obiettivi}." IMPORTANTE: riformula l'obiettivo in terza persona (es. se il form dice "posizionarmi" tu dici "posizionarsi", se dice "trovare i miei clienti" tu dici "trovare i suoi clienti"). Poi approfondisci in base a quello che ha detto:
-  Se l'obiettivo e' trovare clienti/B2B: "Qual e' la tipologia di cliente ideale che sta cercando?"
-  Se l'obiettivo e' partnership/collaborazioni: "Che tipo di partner commerciali sta cercando?"
-  Se l'obiettivo e' trovare lavoro: "In realta' questa chiamata e' stata pensata per chi sta cercando clienti, per il suo caso specifico dovrebbe contattare la mia collega tramite il link che ha ricevuto via e-mail." — Chiudi educatamente.
-  Per qualsiasi altro obiettivo: approfondisci con una domanda specifica su quello che ha detto
+- "Ho visto che come obiettivo ha indicato di {obiettivi}." Riformula sempre in terza persona (es. "posizionarmi" diventa "posizionarsi"). Approfondisci: se cerca clienti chiedi che tipo, se cerca partner chiedi quali. Se cerca lavoro: "In realta' questa chiamata e' pensata per chi cerca clienti, per il suo caso dovrebbe contattare la mia collega tramite il link ricevuto via email." e chiudi.
 - "Lavora solo nella sua zona o anche a livello nazionale?" — LinkedIn funziona MEGLIO per chi ha un raggio almeno regionale o nazionale. Se lavora solo in un paesino o zona molto ristretta, chiudi: "Le dico la verita', LinkedIn funziona meglio per chi lavora almeno a livello regionale. Per la sua situazione le abbiamo mandato risorse via email. Buona giornata!"
 - Se hai il budget dal form: "Ho visto che ha indicato {budget} come investimento potenziale. E' lei che prende la decisione o deve confrontarsi con qualcuno?"
   Se NON hai il budget: "Se Davide le propone un percorso, e' lei che decide o deve sentire qualcun altro?"
