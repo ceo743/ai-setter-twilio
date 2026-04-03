@@ -836,7 +836,7 @@ def test_response():
 
 @app.route("/health", methods=["GET"])
 def health():
-    return {"status": "ok", "version": "v6.23-prompt-refined"}
+    return {"status": "ok", "version": "v6.33-fix-chiusura"}
 
 
 @app.route("/dashboard", methods=["GET"])
