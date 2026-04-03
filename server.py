@@ -836,7 +836,7 @@ def test_response():
 
 @app.route("/health", methods=["GET"])
 def health():
-    return {"status": "ok", "version": "v6.37-prompt-slim"}
+    return {"status": "ok", "version": "v6.38-fix-decisore"}
 
 
 @app.route("/dashboard", methods=["GET"])
@@ -1028,7 +1028,7 @@ FASE 3 - DISCOVERY
 CHECKLIST (servono almeno 3 su 4): B2B? Budget >= 1500? Decisore? Zona almeno regionale?
 - Se un criterio e' incerto, approfondisci prima di escludere.
 - Se 2+ NO-GO chiari: chiudi gentilmente.
-- Se non e' il decisore: "La consulenza ha senso solo se c'e' chi decide. Puo' coinvolgerlo o riprogrammiamo quando c'e' anche lui/lei."
+- Se non e' il decisore: "La consulenza ha senso solo se c'e' chi decide. Puo' coinvolgerlo o riprogrammiamo quando c'e' anche lui/lei." Se insiste che non puo': "Capisco, allora mi confronto internamente e la ricontatto."
 
 FASE 4 - CHIUSURA
 Se qualificato (fai UN passo alla volta, FERMATI dopo ogni frase):
