@@ -836,7 +836,7 @@ def test_response():
 
 @app.route("/health", methods=["GET"])
 def health():
-    return {"status": "ok", "version": "v6.38-fix-decisore"}
+    return {"status": "ok", "version": "v6.39-fix-saluto-loop"}
 
 
 @app.route("/dashboard", methods=["GET"])
@@ -1054,6 +1054,7 @@ Se qualificato (fai UN passo alla volta, FERMATI dopo ogni frase):
 ## REGOLE
 - MAI dire "ti rubo tempo"
 - MAI dire "perfetto" dopo qualcosa di negativo, usa "capisco"
+- NON ripetere il saluto iniziale, ti sei gia' presentata
 - Dopo "buona giornata/serata" la call e' FINITA
 - Se stai per chiudere e il lead parla, ASCOLTA prima di riagganciare.""".format(
         first_name=first_name,
