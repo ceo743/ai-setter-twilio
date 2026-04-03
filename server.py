@@ -836,7 +836,7 @@ def test_response():
 
 @app.route("/health", methods=["GET"])
 def health():
-    return {"status": "ok", "version": "v6.42-notifica-wa-completa"}
+    return {"status": "ok", "version": "v6.43-todo-mail-notifica"}
 
 
 @app.route("/dashboard", methods=["GET"])
@@ -1472,10 +1472,11 @@ def handle_media_stream(ws):
             else:
                 status = "da confermare"
 
-            # Check problemi da segnalare
+            # Check problemi da segnalare — cerca frasi dove Stefania promette invio mail
             problemi = []
-            if any(p in stefania_text for p in ["segnalo ai colleghi", "rimanderanno a stretto giro"]):
-                problemi.append("Il lead non ha ricevuto la mail con il link Google Meet")
+            for role, text in transcript_log:
+                if role == "Stefania" and any(p in text.lower() for p in ["mail", "email", "e-mail"]):
+                    problemi.append(text.strip())
 
             entry = {
                 "phone": phone,
@@ -1498,7 +1499,7 @@ def handle_media_stream(ws):
                 transcript_url = save_transcript(entry, transcript_text)
                 esito_map = {"qualificato": "Confermato", "non in target": "Non Confermato", "da confermare": "Da Confermare"}
                 esito = esito_map.get(entry["status"], "Da Confermare")
-                problema_str = "\n\n⚠️ " + "\n⚠️ ".join(problemi) if problemi else ""
+                problema_str = "\n\n📌 TODO:\n" + "\n".join("- " + p for p in problemi) if problemi else ""
                 summary = (
                     "📞 DATI CHIAMATA:\n"
                     "Nome Cognome: {} {}\n"
