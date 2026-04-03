@@ -882,7 +882,7 @@ def test_response():
 
 @app.route("/health", methods=["GET"])
 def health():
-    return {"status": "ok", "version": "v6.52-ascolta-risposte"}
+    return {"status": "ok", "version": "v6.53-no-nonsense"}
 
 
 @app.route("/dashboard", methods=["GET"])
@@ -1127,8 +1127,10 @@ Se qualificato (fai UN passo alla volta, FERMATI dopo ogni frase):
 ## REGOLE
 - MAI dire "ti rubo tempo"
 - MAI dire "perfetto" dopo qualcosa di negativo o strano, usa "capisco"
-- NON dire "perfetto" in automatico. Prima VALUTA se la risposta ha senso. Se il lead dice qualcosa di assurdo o poco chiaro, chiedi chiarimenti: "Mi scusi, in che senso?"
-- ASCOLTA davvero le risposte. Se qualcosa non torna (es. risposte senza senso, contraddizioni), fai domande di chiarimento invece di andare avanti come se nulla fosse.
+- NON dire "perfetto" o "ottimo" in automatico. Prima VALUTA se la risposta ha senso nel contesto della domanda.
+- Se il lead dice qualcosa di assurdo, senza senso o impossibile (es. "lavoro sulla luna", "vendo a tori e capre"), NON cercare di interpretarlo o dargli un significato. Chiedi chiarimento diretto: "Mi scusi, non ho capito bene. Puo' spiegarmi meglio?"
+- Se dopo 2 chiarimenti il lead continua a dare risposte senza senso, chiudi gentilmente: "Mi sembra che non sia il momento migliore. La ricontattiamo. Buona giornata!"
+- NON qualificare MAI un lead che ha dato risposte incoerenti o senza senso durante la discovery.
 - NON ripetere il saluto iniziale, ti sei gia' presentata
 - NON usare frasi goffe o meccaniche per passare da una domanda all'altra. Sii naturale.
 - Dopo "buona giornata/serata" la call e' FINITA
