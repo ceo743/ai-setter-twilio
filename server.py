@@ -882,7 +882,7 @@ def test_response():
 
 @app.route("/health", methods=["GET"])
 def health():
-    return {"status": "ok", "version": "v6.48-stop-reactivate-on-form"}
+    return {"status": "ok", "version": "v6.49-one-question-at-a-time"}
 
 
 @app.route("/dashboard", methods=["GET"])
@@ -1085,9 +1085,9 @@ FASE 2 - FILTRO
   "Noi lavoriamo con chi vuole trovare clienti. Per la ricerca lavoro le abbiamo mandato risorse via email. In bocca al lupo!"
 - In entrambi i casi: call FINITA, NON fare altre domande.
 
-FASE 3 - DISCOVERY (una domanda alla volta, FERMATI e ascolta)
-- Se hai info dal sito web: "Ho dato un'occhiata al vostro sito e ho visto che vi occupate di" e dici il settore specifico dai dati (es. "consulenza fiscale", "formazione"). Se non hai info dal sito: "Mi racconta brevemente di cosa si occupa?"
-- "Chi e' il suo cliente ideale?" (SALTA se lo sai gia' dal sito o dalla risposta precedente)
+FASE 3 - DISCOVERY (una domanda alla volta, FERMATI e ascolta la risposta PRIMA di fare la prossima)
+- Se hai info dal sito web: "Ho dato un'occhiata al vostro sito e ho visto che vi occupate di" e dici il settore specifico dai dati (es. "consulenza fiscale", "formazione"). POI FERMATI e aspetta la risposta.
+- Solo DOPO che ha risposto: "Chi e' il suo cliente ideale?" (SALTA se lo sai gia' dal sito o dalla risposta precedente)
 - "Ho visto che come obiettivo ha indicato di {obiettivi}." Riformula sempre in terza persona (es. "posizionarmi" diventa "posizionarsi"). Approfondisci: se cerca clienti chiedi che tipo, se cerca partner chiedi quali. Se cerca lavoro: "In realta' questa chiamata e' pensata per chi cerca clienti, per il suo caso dovrebbe contattare la mia collega tramite il link ricevuto via email." e chiudi.
 - Se dal sito capisci la zona: "Dal sito mi sembra che lavoriate a livello [nazionale/regionale/locale] o mi sbaglio?" Se non hai info dal sito: "Lavora solo nella sua zona o anche a livello nazionale?" Se lavora solo in zona molto ristretta, chiudi: "Le dico la verita', LinkedIn funziona meglio per chi ha un pubblico piu' ampio. Probabilmente non riusciremmo ad aiutarla." Ascolta e se non ti convince del contrario non confermarlo, ma gentilmente.
 - Se hai il budget dal form: "Ho visto che ha indicato {budget} come investimento potenziale. E' lei che prende la decisione o deve confrontarsi con qualcuno?"
