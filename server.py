@@ -247,8 +247,24 @@ WA_TEMPLATE_PRIMO_TENTATIVO = "HX66c6c02faa67d23e446cf69d07394f36"
 WA_TEMPLATE_ULTIMO_TENTATIVO = "HX99ee0607803dae0fbf3b7358734d08cf"
 WA_TEMPLATE_REMINDER = "HX4aac79d57bc31b19c77f44667f876ff1"
 
-# Track opted-out numbers (STOP)
-opted_out_numbers = set()
+# Track opted-out numbers (STOP) — persistent via JSON file
+OPTED_OUT_FILE = "/tmp/opted_out_numbers.json"
+
+def _load_opted_out():
+    try:
+        with open(OPTED_OUT_FILE, "r") as f:
+            return set(json.load(f))
+    except (FileNotFoundError, json.JSONDecodeError):
+        return set()
+
+def _save_opted_out():
+    try:
+        with open(OPTED_OUT_FILE, "w") as f:
+            json.dump(list(opted_out_numbers), f)
+    except Exception:
+        logger.exception("Failed to save opted_out_numbers")
+
+opted_out_numbers = _load_opted_out()
 
 
 def schedule_reminder(phone_number, form_data):
@@ -652,6 +668,7 @@ def whatsapp_incoming():
     stop_keywords = ["stop", "basta", "non contattare", "non chiamare", "cancella"]
     if any(kw in body for kw in stop_keywords):
         opted_out_numbers.add(from_number)
+        _save_opted_out()
         if from_number in call_retries:
             call_retries[from_number]["answered"] = True  # Stop retries
         logger.info("WHATSAPP IN: Lead %s opted out (STOP)", from_number)
@@ -836,7 +853,7 @@ def test_response():
 
 @app.route("/health", methods=["GET"])
 def health():
-    return {"status": "ok", "version": "v6.43-todo-mail-notifica"}
+    return {"status": "ok", "version": "v6.44-stop-persistente"}
 
 
 @app.route("/dashboard", methods=["GET"])
