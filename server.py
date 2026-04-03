@@ -247,22 +247,45 @@ WA_TEMPLATE_PRIMO_TENTATIVO = "HX66c6c02faa67d23e446cf69d07394f36"
 WA_TEMPLATE_ULTIMO_TENTATIVO = "HX99ee0607803dae0fbf3b7358734d08cf"
 WA_TEMPLATE_REMINDER = "HX4aac79d57bc31b19c77f44667f876ff1"
 
-# Track opted-out numbers (STOP) — persistent via JSON file
-OPTED_OUT_FILE = "/app/opted_out_numbers.json"
+# Track opted-out numbers (STOP) — persistent via Upstash Redis
+UPSTASH_REDIS_REST_URL = os.getenv("UPSTASH_REDIS_REST_URL", "")
+UPSTASH_REDIS_REST_TOKEN = os.getenv("UPSTASH_REDIS_REST_TOKEN", "")
+UPSTASH_STOP_KEY = "opted_out_numbers"
+
+
+def _redis_request(command_args):
+    """Send a command to Upstash Redis REST API."""
+    if not UPSTASH_REDIS_REST_URL or not UPSTASH_REDIS_REST_TOKEN:
+        logger.warning("Upstash Redis not configured — STOP list not persistent")
+        return None
+    try:
+        resp = httpx.post(
+            UPSTASH_REDIS_REST_URL,
+            headers={"Authorization": "Bearer " + UPSTASH_REDIS_REST_TOKEN},
+            json=command_args,
+            timeout=5,
+        )
+        return resp.json().get("result")
+    except Exception:
+        logger.exception("Upstash Redis request failed")
+        return None
+
 
 def _load_opted_out():
-    try:
-        with open(OPTED_OUT_FILE, "r") as f:
-            return set(json.load(f))
-    except (FileNotFoundError, json.JSONDecodeError):
-        return set()
+    result = _redis_request(["SMEMBERS", UPSTASH_STOP_KEY])
+    if result and isinstance(result, list):
+        return set(result)
+    return set()
 
-def _save_opted_out():
-    try:
-        with open(OPTED_OUT_FILE, "w") as f:
-            json.dump(list(opted_out_numbers), f)
-    except Exception:
-        logger.exception("Failed to save opted_out_numbers")
+
+def _add_opted_out(phone):
+    _redis_request(["SADD", UPSTASH_STOP_KEY, phone])
+
+
+def _is_opted_out(phone):
+    result = _redis_request(["SISMEMBER", UPSTASH_STOP_KEY, phone])
+    return result == 1
+
 
 opted_out_numbers = _load_opted_out()
 
@@ -668,7 +691,7 @@ def whatsapp_incoming():
     stop_keywords = ["stop", "basta", "non contattare", "non chiamare", "cancella"]
     if any(kw in body for kw in stop_keywords):
         opted_out_numbers.add(from_number)
-        _save_opted_out()
+        _add_opted_out(from_number)
         if from_number in call_retries:
             call_retries[from_number]["answered"] = True  # Stop retries
         logger.info("WHATSAPP IN: Lead %s opted out (STOP)", from_number)
@@ -853,7 +876,7 @@ def test_response():
 
 @app.route("/health", methods=["GET"])
 def health():
-    return {"status": "ok", "version": "v6.45-stop-app-path"}
+    return {"status": "ok", "version": "v6.46-stop-upstash-redis"}
 
 
 @app.route("/dashboard", methods=["GET"])
