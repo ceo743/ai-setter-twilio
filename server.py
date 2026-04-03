@@ -836,7 +836,7 @@ def test_response():
 
 @app.route("/health", methods=["GET"])
 def health():
-    return {"status": "ok", "version": "v6.41-fix-esito-e-problemi-wa"}
+    return {"status": "ok", "version": "v6.42-notifica-wa-completa"}
 
 
 @app.route("/dashboard", methods=["GET"])
@@ -1499,9 +1499,32 @@ def handle_media_stream(ws):
                 esito_map = {"qualificato": "Confermato", "non in target": "Non Confermato", "da confermare": "Da Confermare"}
                 esito = esito_map.get(entry["status"], "Da Confermare")
                 problema_str = "\n\n⚠️ " + "\n⚠️ ".join(problemi) if problemi else ""
-                summary = "📞 CALL COMPLETATA\n{} {} - {}\nRuolo: {}\nEsito: {}{}\n\n📄 Trascrizione:\n{}".format(
-                    entry["nome"], entry["cognome"], entry["phone"],
-                    entry["ruolo"] or "N/A", esito, problema_str, transcript_url,
+                summary = (
+                    "📞 DATI CHIAMATA:\n"
+                    "Nome Cognome: {} {}\n"
+                    "Email: {}\n"
+                    "Telefono: {}\n"
+                    "Ruolo: {}\n"
+                    "Esito: {}{}\n\n"
+                    "📄 RISPOSTE FORM:\n"
+                    "Acquisizione: {}\n"
+                    "Obiettivo: {}\n"
+                    "Fatturato: {}\n"
+                    "Budget: {}\n"
+                    "Sito Web: {}\n\n"
+                    "🖊️ Trascrizione:\n{}"
+                ).format(
+                    lead_data.get("nome", "N/A"), lead_data.get("cognome", "N/A"),
+                    lead_data.get("email", "N/A"),
+                    lead_data.get("cellulare", "N/A"),
+                    lead_data.get("ruolo", "N/A") or "N/A",
+                    esito, problema_str,
+                    lead_data.get("acquisizione_clienti", "N/A") or "N/A",
+                    lead_data.get("obiettivi_linkedin", "N/A") or "N/A",
+                    lead_data.get("fatturato", "N/A") or "N/A",
+                    lead_data.get("budget", "N/A") or "N/A",
+                    lead_data.get("sito_web", "N/A") or "N/A",
+                    transcript_url,
                 )
                 def notify_davide():
                     try:
