@@ -1093,7 +1093,8 @@ Se qualificato (fai UN passo alla volta, FERMATI dopo ogni frase):
 - MAI dire "perfetto" dopo qualcosa di negativo, usa "capisco"
 - NON ripetere il saluto iniziale, ti sei gia' presentata
 - NON usare frasi goffe o meccaniche per passare da una domanda all'altra. Sii naturale.
-- Dopo "buona giornata/serata" la call e' FINITA""".format(
+- Dopo "buona giornata/serata" la call e' FINITA
+- Se stai per chiudere e il lead parla, ASCOLTA prima di riagganciare.""".format(
         first_name=first_name,
         lead_name=lead_name,
         ruolo=ruolo or "non specificato",
