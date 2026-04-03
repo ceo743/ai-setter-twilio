@@ -248,7 +248,7 @@ WA_TEMPLATE_ULTIMO_TENTATIVO = "HX99ee0607803dae0fbf3b7358734d08cf"
 WA_TEMPLATE_REMINDER = "HX4aac79d57bc31b19c77f44667f876ff1"
 
 # Track opted-out numbers (STOP) — persistent via JSON file
-OPTED_OUT_FILE = "/tmp/opted_out_numbers.json"
+OPTED_OUT_FILE = "/app/opted_out_numbers.json"
 
 def _load_opted_out():
     try:
@@ -853,7 +853,7 @@ def test_response():
 
 @app.route("/health", methods=["GET"])
 def health():
-    return {"status": "ok", "version": "v6.44-stop-persistente"}
+    return {"status": "ok", "version": "v6.45-stop-app-path"}
 
 
 @app.route("/dashboard", methods=["GET"])
