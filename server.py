@@ -836,7 +836,7 @@ def test_response():
 
 @app.route("/health", methods=["GET"])
 def health():
-    return {"status": "ok", "version": "v6.40-restore-v636-prompt"}
+    return {"status": "ok", "version": "v6.41-fix-esito-e-problemi-wa"}
 
 
 @app.route("/dashboard", methods=["GET"])
@@ -1457,14 +1457,25 @@ def handle_media_stream(ws):
                 "{}: {}".format(role, text) for role, text in transcript_log
             )
             full_text = " ".join(t for _, t in transcript_log).lower()
+            stefania_text = " ".join(t for role, t in transcript_log if role == "Stefania").lower()
             non_target_phrases = ["non sono interessat", "non mi interessa", "non fa per me",
-                                  "non e' il momento", "non è il momento", "non ho tempo", "non ho bisogno"]
+                                  "non e' il momento", "non è il momento", "non ho tempo", "non ho bisogno",
+                                  "risorse via email"]
+            qualificato_phrases = ["ci vediamo il", "massima puntualita", "massima puntualità",
+                                   "assolutamente in linea", "link di google meet"]
             if any(phrase in full_text for phrase in non_target_phrases):
                 status = "non in target"
+            elif any(phrase in stefania_text for phrase in qualificato_phrases):
+                status = "qualificato"
             elif "conferm" in full_text and "consulenz" in full_text:
                 status = "qualificato"
             else:
                 status = "da confermare"
+
+            # Check problemi da segnalare
+            problemi = []
+            if any(p in stefania_text for p in ["segnalo ai colleghi", "rimanderanno a stretto giro"]):
+                problemi.append("Il lead non ha ricevuto la mail con il link Google Meet")
 
             entry = {
                 "phone": phone,
@@ -1487,9 +1498,10 @@ def handle_media_stream(ws):
                 transcript_url = save_transcript(entry, transcript_text)
                 esito_map = {"qualificato": "Confermato", "non in target": "Non Confermato", "da confermare": "Da Confermare"}
                 esito = esito_map.get(entry["status"], "Da Confermare")
-                summary = "📞 CALL COMPLETATA\n{} {} - {}\nRuolo: {}\nEsito: {}\n\n📄 Trascrizione:\n{}".format(
+                problema_str = "\n\n⚠️ " + "\n⚠️ ".join(problemi) if problemi else ""
+                summary = "📞 CALL COMPLETATA\n{} {} - {}\nRuolo: {}\nEsito: {}{}\n\n📄 Trascrizione:\n{}".format(
                     entry["nome"], entry["cognome"], entry["phone"],
-                    entry["ruolo"] or "N/A", esito, transcript_url,
+                    entry["ruolo"] or "N/A", esito, problema_str, transcript_url,
                 )
                 def notify_davide():
                     try:
