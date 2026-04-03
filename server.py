@@ -441,10 +441,11 @@ def make_call():
     data = request.json if request.is_json else {}
     to_number = data.get("to", MY_PHONE_NUMBER)
 
-    # Check STOP list — also check Redis directly for fresh data
+    # If number was in STOP list but re-filled the form, reactivate them
     if to_number in opted_out_numbers or _is_opted_out(to_number):
-        logger.info("MAKE-CALL: Blocked — %s is in STOP list", to_number)
-        return jsonify({"status": "blocked", "reason": "opted_out"}), 403
+        opted_out_numbers.discard(to_number)
+        _redis_request(["SREM", UPSTASH_STOP_KEY, to_number])
+        logger.info("MAKE-CALL: %s was in STOP list but re-filled form — reactivated", to_number)
 
     # Lead data from Calendly form (passed by n8n)
     lead_data = {
@@ -881,7 +882,7 @@ def test_response():
 
 @app.route("/health", methods=["GET"])
 def health():
-    return {"status": "ok", "version": "v6.47-stop-block-makecall"}
+    return {"status": "ok", "version": "v6.48-stop-reactivate-on-form"}
 
 
 @app.route("/dashboard", methods=["GET"])
