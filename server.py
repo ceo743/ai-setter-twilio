@@ -882,7 +882,7 @@ def test_response():
 
 @app.route("/health", methods=["GET"])
 def health():
-    return {"status": "ok", "version": "v6.53-no-nonsense"}
+    return {"status": "ok", "version": "v6.54-esito-detection-fix"}
 
 
 @app.route("/dashboard", methods=["GET"])
@@ -1510,10 +1510,12 @@ def handle_media_stream(ws):
             stefania_text = " ".join(t for role, t in transcript_log if role == "Stefania").lower()
             non_target_phrases = ["non sono interessat", "non mi interessa", "non fa per me",
                                   "non e' il momento", "non è il momento", "non ho tempo", "non ho bisogno",
-                                  "risorse via email"]
+                                  "risorse via email", "risorse che le abbiamo", "non riusciamo a essere di aiuto",
+                                  "non riusciremmo ad aiutarla", "temo che il nostro metodo non sia adatto",
+                                  "non credo che linkedin sia lo strumento adatto"]
             qualificato_phrases = ["ci vediamo il", "massima puntualita", "massima puntualità",
                                    "assolutamente in linea", "link di google meet"]
-            if any(phrase in full_text for phrase in non_target_phrases):
+            if any(phrase in full_text or phrase in stefania_text for phrase in non_target_phrases):
                 status = "non in target"
             elif any(phrase in stefania_text for phrase in qualificato_phrases):
                 status = "qualificato"
