@@ -441,6 +441,11 @@ def make_call():
     data = request.json if request.is_json else {}
     to_number = data.get("to", MY_PHONE_NUMBER)
 
+    # Check STOP list — also check Redis directly for fresh data
+    if to_number in opted_out_numbers or _is_opted_out(to_number):
+        logger.info("MAKE-CALL: Blocked — %s is in STOP list", to_number)
+        return jsonify({"status": "blocked", "reason": "opted_out"}), 403
+
     # Lead data from Calendly form (passed by n8n)
     lead_data = {
         "nome": data.get("nome", ""),
@@ -876,7 +881,7 @@ def test_response():
 
 @app.route("/health", methods=["GET"])
 def health():
-    return {"status": "ok", "version": "v6.46-stop-upstash-redis"}
+    return {"status": "ok", "version": "v6.47-stop-block-makecall"}
 
 
 @app.route("/dashboard", methods=["GET"])
