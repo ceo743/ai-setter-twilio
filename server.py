@@ -923,7 +923,7 @@ def test_response():
 
 @app.route("/health", methods=["GET"])
 def health():
-    return {"status": "ok", "version": "v6.60-analytics-v2"}
+    return {"status": "ok", "version": "v6.61-silence-nudge"}
 
 
 @app.route("/dashboard", methods=["GET"])
@@ -1209,6 +1209,7 @@ def handle_media_stream(ws):
 
     # Gate: don't forward audio to OpenAI until opening message starts playing
     opening_audio_started = threading.Event()
+    lead_has_spoken = [False]  # Track if lead has spoken at all
 
     # Queue for messages TO OpenAI (main thread -> openai_thread)
     openai_send_queue = queue.Queue()
@@ -1359,6 +1360,7 @@ def handle_media_stream(ws):
                 waiting_for_response[0] = True
 
             elif event_type == "input_audio_buffer.speech_started":
+                lead_has_spoken[0] = True
                 if not opening_audio_started.is_set():
                     logger.info("Speech before opening — ignored")
                     continue
@@ -1504,6 +1506,23 @@ def handle_media_stream(ws):
 
                 # No manual opening — prompt tells Stefania to wait for lead's "Pronto?"
                 logger.info("Session ready — waiting for lead to speak (%s)", first_name)
+
+                # Silence timer: if lead doesn't speak within 4s, nudge Stefania
+                def silence_nudge():
+                    if not lead_has_spoken[0] and not stop_event.is_set():
+                        logger.info("SILENCE: lead hasn't spoken in 4s — nudging Stefania")
+                        send_to_openai({
+                            "type": "conversation.item.create",
+                            "item": {
+                                "type": "message",
+                                "role": "user",
+                                "content": [{"type": "input_text", "text": "(silenzio — il lead ha risposto ma non parla)"}],
+                            },
+                        })
+                        send_to_openai({"type": "response.create"})
+                silence_timer = threading.Timer(4.0, silence_nudge)
+                silence_timer.daemon = True
+                silence_timer.start()
 
             elif event == "media":
                 payload = data["media"]["payload"]
