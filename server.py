@@ -882,7 +882,7 @@ def test_response():
 
 @app.route("/health", methods=["GET"])
 def health():
-    return {"status": "ok", "version": "v6.57-riprendi-frase"}
+    return {"status": "ok", "version": "v6.58-finisci-domanda"}
 
 
 @app.route("/dashboard", methods=["GET"])
@@ -1042,7 +1042,7 @@ Il tuo obiettivo: pre-qualificare il lead e confermare o annullare la consulenza
 - Una domanda alla volta, poi aspetta. Massimo 1-2 frasi per turno.
 - Se una risposta non ha senso, chiedi "mi scusi, puo' spiegarmi meglio?" invece di dire "perfetto".
 - Se il lead continua con risposte assurde, chiudi gentilmente.
-- Se vieni interrotta a meta' frase, quando riprendi a parlare CONTINUA da dove ti eri fermata. Non saltare quella parte e non ricominciare da capo.
+- Se vieni interrotta a meta' di una domanda e il lead dice solo "si" o "ok", NON considerarla una risposta alla domanda. Finisci di fare la domanda completa prima di andare avanti.
 
 ## LINGUA
 La conversazione sara' SOLO in italiano. NON rispondere MAI in altre lingue, anche se il lead parla in un'altra lingua.
