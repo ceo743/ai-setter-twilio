@@ -291,6 +291,45 @@ def _is_opted_out(phone):
 
 opted_out_numbers = _load_opted_out()
 
+REDIS_CALLS_KEY = "call_history"
+
+
+def _save_call_to_redis(entry, lead_data, transcript_text, problemi):
+    """Persist call data to Redis for analytics."""
+    call_data = {
+        "phone": entry.get("phone", ""),
+        "nome": lead_data.get("nome", ""),
+        "cognome": lead_data.get("cognome", ""),
+        "email": lead_data.get("email", ""),
+        "ruolo": lead_data.get("ruolo", ""),
+        "obiettivi": lead_data.get("obiettivi_linkedin", ""),
+        "acquisizione": lead_data.get("acquisizione_clienti", ""),
+        "fatturato": lead_data.get("fatturato", ""),
+        "budget": lead_data.get("budget", ""),
+        "sito_web": lead_data.get("sito_web", ""),
+        "status": entry.get("status", "da confermare"),
+        "timestamp": entry.get("timestamp", ""),
+        "data_consulenza": lead_data.get("data_consulenza", ""),
+        "transcript": transcript_text or "",
+        "problemi": problemi or [],
+        "duration_turns": len([t for t in (transcript_text or "").split("\n") if t.strip()]),
+    }
+    _redis_request(["LPUSH", REDIS_CALLS_KEY, json.dumps(call_data, ensure_ascii=False)])
+
+
+def _load_calls_from_redis(limit=200):
+    """Load call history from Redis."""
+    result = _redis_request(["LRANGE", REDIS_CALLS_KEY, "0", str(limit - 1)])
+    if result and isinstance(result, list):
+        calls = []
+        for item in result:
+            try:
+                calls.append(json.loads(item))
+            except (json.JSONDecodeError, TypeError):
+                pass
+        return calls
+    return []
+
 
 def schedule_reminder(phone_number, form_data):
     """Schedule a WhatsApp reminder 2 minutes before the consultation."""
@@ -884,7 +923,7 @@ def test_response():
 
 @app.route("/health", methods=["GET"])
 def health():
-    return {"status": "ok", "version": "v6.59-analytics-dashboard"}
+    return {"status": "ok", "version": "v6.60-analytics-v2"}
 
 
 @app.route("/dashboard", methods=["GET"])
@@ -1537,6 +1576,8 @@ def handle_media_stream(ws):
                 "data_consulenza": lead_data.get("data_consulenza", ""),
             }
             call_history.append(entry)
+            # Persist to Redis for analytics
+            _save_call_to_redis(entry, lead_data, transcript_text, problemi)
             logger.info("Call saved: %s %s - %s", entry["nome"], entry["cognome"], entry["status"])
 
             if status == "qualificato" and phone:
