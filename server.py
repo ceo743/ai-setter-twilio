@@ -461,6 +461,7 @@ def schedule_retry(phone_number):
                 to=phone_number,
                 from_=TWILIO_PHONE_NUMBER,
                 url=twiml_url,
+                record=True,
                 status_callback=status_url,
                 status_callback_event=["completed", "no-answer", "busy", "failed", "canceled"],
             )
@@ -527,6 +528,7 @@ def make_call():
             to=to_number,
             from_=TWILIO_PHONE_NUMBER,
             url=twiml_url,
+            record=True,
             status_callback=status_url,
             status_callback_event=["completed", "no-answer", "busy", "failed", "canceled"],
             machine_detection="Enable",
@@ -780,6 +782,7 @@ def whatsapp_incoming():
                 to=from_number,
                 from_=TWILIO_PHONE_NUMBER,
                 url=twiml_url,
+                record=True,
                 status_callback=status_url,
                 status_callback_event=["completed", "no-answer", "busy", "failed", "canceled"],
             )
@@ -923,7 +926,7 @@ def test_response():
 
 @app.route("/health", methods=["GET"])
 def health():
-    return {"status": "ok", "version": "v6.62-prompt-fix"}
+    return {"status": "ok", "version": "v6.63-recording"}
 
 
 @app.route("/dashboard", methods=["GET"])
