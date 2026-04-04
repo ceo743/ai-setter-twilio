@@ -30,6 +30,7 @@ from twilio.twiml.voice_response import Connect, VoiceResponse
 
 from knowledge_base import get_knowledge_prompt, check_lead_prefilter, _format_time_spoken, _format_date_spoken, _extract_time_from_iso
 from setter_prompt import get_setter_prompt
+from analytics import analytics_bp
 import re
 
 # ---------------------------------------------------------------------------
@@ -175,6 +176,7 @@ def scrape_website(url: str) -> str:
 # Flask app + flask-sock
 # ---------------------------------------------------------------------------
 app = Flask(__name__)
+app.register_blueprint(analytics_bp)
 sock = Sock(app)
 
 
@@ -882,7 +884,7 @@ def test_response():
 
 @app.route("/health", methods=["GET"])
 def health():
-    return {"status": "ok", "version": "v6.58-finisci-domanda"}
+    return {"status": "ok", "version": "v6.59-analytics-dashboard"}
 
 
 @app.route("/dashboard", methods=["GET"])
