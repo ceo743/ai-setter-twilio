@@ -31,6 +31,7 @@ from twilio.twiml.voice_response import Connect, VoiceResponse
 from knowledge_base import get_knowledge_prompt, check_lead_prefilter, _format_time_spoken, _format_date_spoken, _extract_time_from_iso
 from setter_prompt import get_setter_prompt
 from analytics import analytics_bp
+from google_services import handle_post_call_automation
 import re
 
 # ---------------------------------------------------------------------------
@@ -1604,6 +1605,14 @@ def handle_media_stream(ws):
 
             if status == "qualificato" and phone:
                 schedule_reminder(phone, lead_data)
+
+            # Google automation (email, calendar, doc) in background
+            def run_google_automation():
+                try:
+                    handle_post_call_automation(status, lead_data, transcript_text)
+                except Exception:
+                    logger.exception("Google automation failed")
+            threading.Thread(target=run_google_automation, daemon=True).start()
 
             if transcript_text:
                 transcript_url = save_transcript(entry, transcript_text)
