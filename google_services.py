@@ -34,50 +34,58 @@ DOC_TEMPLATE_ID = "144O6QWLfnq-EPtvTmn2eQCUhXrxGBR8GeBF1yARedGg"
 # Email content per outcome
 EMAIL_CONFIGS = {
     "confermato": {
-        "subject": "Il tuo link per la consulenza strategica",
+        "subject": "{nome}, la tua consulenza strategica è confermata",
         "body": (
             "Ciao {nome},\n\n"
-            "grazie per aver confermato la consulenza strategica con Davide Caiazzo.\n\n"
-            "Ecco il link per collegarti il giorno {data} alle {ora}:\n"
+            "la tua sessione strategica con Davide Caiazzo è confermata "
+            "per il {data} alle {ora}.\n\n"
+            "Collegati da qui:\n"
             "{meet_link}\n\n"
-            "Ti consiglio di essere puntuale: la sessione inizierà in orario.\n\n"
+            "Davide ha riservato questo slot esclusivamente per te. "
+            "Per ottenere il massimo dalla sessione, tieni a mente "
+            "il tuo obiettivo principale su LinkedIn e i numeri chiave "
+            "del tuo business.\n\n"
+            "La sessione parte in orario, collegati qualche minuto prima.\n\n"
             "A presto,\n"
             "Il team di Davide Caiazzo"
         ),
     },
     "budget_basso": {
-        "subject": "Risorse per iniziare con LinkedIn",
+        "subject": "{nome}, inizia a generare contatti su LinkedIn",
         "body": (
             "Ciao {nome},\n\n"
-            "grazie per il tempo che ci hai dedicato.\n\n"
-            "Come anticipato, ti condivido una risorsa gratuita per iniziare "
-            "a ottenere risultati su LinkedIn:\n"
+            "come anticipato, ecco la risorsa per iniziare a ottenere "
+            "risultati concreti su LinkedIn:\n"
             "https://bit.ly/primo_passo_dc\n\n"
-            "Quando vorrai fare il passo successivo, saremo qui.\n\n"
+            "Chi ha applicato questo metodo ha iniziato a ricevere "
+            "richieste di contatto qualificate già nelle prime settimane.\n\n"
+            "Quando vorrai accelerare i risultati, saremo qui.\n\n"
             "A presto,\n"
             "Il team di Davide Caiazzo"
         ),
     },
     "non_puo_investire": {
-        "subject": "Risorse utili per il tuo percorso",
+        "subject": "{nome}, una risorsa per il tuo business su LinkedIn",
         "body": (
             "Ciao {nome},\n\n"
-            "grazie per la chiacchierata.\n\n"
-            "Ti lascio un link con risorse utili per quando sarai pronto:\n"
+            "grazie per la conversazione.\n\n"
+            "Ti lascio un accesso diretto alle risorse che usiamo con "
+            "i nostri clienti per generare contatti qualificati su LinkedIn:\n"
             "https://clientisurichiesta.com\n\n"
-            "In bocca al lupo,\n"
+            "Buon lavoro,\n"
             "Il team di Davide Caiazzo"
         ),
     },
     "cerca_lavoro": {
-        "subject": "Trova lavoro con LinkedIn",
+        "subject": "{nome}, LinkedIn per trovare lavoro",
         "body": (
             "Ciao {nome},\n\n"
-            "grazie per il tempo.\n\n"
-            "Come promesso, ecco la risorsa per usare LinkedIn "
+            "come promesso, ecco la guida per usare LinkedIn "
             "nella ricerca di lavoro:\n"
             "https://bit.ly/lavoro_linkedin\n\n"
-            "In bocca al lupo!\n"
+            "Dentro trovi un metodo pratico per farti notare "
+            "dai recruiter e dalle aziende giuste.\n\n"
+            "Buon lavoro,\n"
             "Il team di Davide Caiazzo"
         ),
     },
@@ -144,7 +152,7 @@ def send_email(to_email, email_type, lead_data, meet_link=""):
     data_consulenza = lead_data.get("data_consulenza", "")
     ora_consulenza = lead_data.get("ora_consulenza", "")
 
-    subject = config["subject"]
+    subject = config["subject"].format(nome=nome)
     body = config["body"].format(
         nome=nome,
         data=data_consulenza,
