@@ -71,7 +71,7 @@ EMAIL_CONFIGS = {
             "grazie per la conversazione.\n\n"
             "Ti lascio un accesso diretto alle risorse che usiamo con "
             "i nostri clienti per generare contatti qualificati su LinkedIn:\n"
-            "https://clientisurichiesta.com\n\n"
+            "https://clienti.davidecaiazzo.it\n\n"
             "Buon lavoro,\n"
             "Il team di Davide Caiazzo"
         ),
