@@ -249,7 +249,7 @@ TWILIO_WHATSAPP_NUMBER = os.getenv("TWILIO_WHATSAPP_NUMBER", "+15559199755")
 WA_TEMPLATE_PRIMO_TENTATIVO = "HX66c6c02faa67d23e446cf69d07394f36"
 WA_TEMPLATE_ULTIMO_TENTATIVO = "HX99ee0607803dae0fbf3b7358734d08cf"
 WA_TEMPLATE_REMINDER = "HX4aac79d57bc31b19c77f44667f876ff1"
-WA_TEMPLATE_NOTIFICA_POST_CALL = "HXbf22b9113c7d89f6bc138c070564ee0f"
+WA_TEMPLATE_NOTIFICA_POST_CALL = "HX8687a482c5532267421cc7195ab840c4"
 
 # Track opted-out numbers (STOP) — persistent via Upstash Redis
 UPSTASH_REDIS_REST_URL = os.getenv("UPSTASH_REDIS_REST_URL", "")
@@ -1651,14 +1651,10 @@ def handle_media_stream(ws):
                     try:
                         client = TwilioClient(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
                         lead_name = "{} {}".format(lead_data.get("nome", "N/A"), lead_data.get("cognome", ""))
-                        ruolo = lead_data.get("ruolo", "N/A") or "N/A"
-                        problema_short = lead_data.get("obiettivi_linkedin", "N/A") or "N/A"
                         variables = {
                             "1": lead_name.strip(),
-                            "2": ruolo,
-                            "3": esito,
-                            "4": problema_short,
-                            "5": transcript_url,
+                            "2": esito,
+                            "3": transcript_url,
                         }
                         try:
                             client.messages.create(
