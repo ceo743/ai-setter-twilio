@@ -1,1 +1,76 @@
-YAML_MISSING
+name: Security Scan on Push
+
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  security-scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+
+      - name: Security scan via Claude
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          SHA: ${{ github.sha }}
+        run: |
+          set -e
+          DIFF=$(git diff HEAD~1 HEAD | head -c 10000)
+          if [ -z "$DIFF" ]; then echo "No diff, skipping"; exit 0; fi
+
+          PAYLOAD=$(python3 -c "
+          import json, sys
+          diff = sys.stdin.read()
+          payload = {
+            'model': 'claude-sonnet-4-5',
+            'max_tokens': 1024,
+            'messages': [{'role': 'user', 'content': 'Review this git diff for security vulnerabilities: hardcoded secrets/API keys, injection (SQL/command/XSS), auth bypass, OWASP Top 10. Reply ONLY with valid JSON: {"issues": true or false, "summary": "...", "findings": ["...", ...]}\nDiff:\n' + diff}]
+          }
+          print(json.dumps(payload))
+          " <<< "$DIFF")
+
+          RESPONSE=$(curl -sf https://api.anthropic.com/v1/messages \
+            -H "x-api-key: $ANTHROPIC_API_KEY" \
+            -H "anthropic-version: 2023-06-01" \
+            -H "content-type: application/json" \
+            -d "$PAYLOAD")
+
+          HAS_ISSUES=$(echo "$RESPONSE" | python3 -c "
+          import sys, json
+          d = json.load(sys.stdin)
+          t = json.loads(d["content"][0]["text"])
+          print('true' if t.get('issues') else 'false')
+          " 2>/dev/null || echo "false")
+
+          if [ "$HAS_ISSUES" = "true" ]; then
+            BODY=$(echo "$RESPONSE" | python3 -c "
+          import sys, json, os
+          d = json.load(sys.stdin)
+          t = json.loads(d["content"][0]["text"])
+          sha = os.environ["SHA"]
+          summary = t.get('summary','')
+          findings = t.get('findings',[])
+          body = '## Security issues in commit \`' + sha[:8] + '\`\n\n' + summary + '\n\n'
+          for f in findings:
+              body += '- ' + f + '\n'
+          print(json.dumps({'title': 'Security issue in commit ' + sha[:8], 'body': body, 'labels': ['security']}))
+          ")
+            curl -sf -X POST "https://api.github.com/repos/$REPO/issues" \
+              -H "Authorization: token $GH_TOKEN" \
+              -H "Content-Type: application/json" \
+              -d "$BODY"
+            echo "Issue created"
+          else
+            echo "No issues found"
+          fi
+
