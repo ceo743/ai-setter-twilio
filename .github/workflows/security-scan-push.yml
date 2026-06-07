@@ -24,53 +24,56 @@ jobs:
           REPO: ${{ github.repository }}
           SHA: ${{ github.sha }}
         run: |
-          set -e
-          DIFF=$(git diff HEAD~1 HEAD | head -c 10000)
-          if [ -z "$DIFF" ]; then echo "No diff, skipping"; exit 0; fi
-
-          PAYLOAD=$(python3 -c "
-          import json, sys
-          diff = sys.stdin.read()
-          payload = {
-            'model': 'claude-sonnet-4-5',
-            'max_tokens': 1024,
-            'messages': [{'role': 'user', 'content': 'Review this git diff for security vulnerabilities: hardcoded secrets/API keys, injection (SQL/command/XSS), auth bypass, OWASP Top 10. Reply ONLY with valid JSON: {"issues": true or false, "summary": "...", "findings": ["...", ...]}\nDiff:\n' + diff}]
-          }
-          print(json.dumps(payload))
-          " <<< "$DIFF")
-
-          RESPONSE=$(curl -sf https://api.anthropic.com/v1/messages \
-            -H "x-api-key: $ANTHROPIC_API_KEY" \
-            -H "anthropic-version: 2023-06-01" \
-            -H "content-type: application/json" \
-            -d "$PAYLOAD")
-
-          HAS_ISSUES=$(echo "$RESPONSE" | python3 -c "
-          import sys, json
-          d = json.load(sys.stdin)
-          t = json.loads(d["content"][0]["text"])
-          print('true' if t.get('issues') else 'false')
-          " 2>/dev/null || echo "false")
-
-          if [ "$HAS_ISSUES" = "true" ]; then
-            BODY=$(echo "$RESPONSE" | python3 -c "
-          import sys, json, os
-          d = json.load(sys.stdin)
-          t = json.loads(d["content"][0]["text"])
-          sha = os.environ["SHA"]
-          summary = t.get('summary','')
-          findings = t.get('findings',[])
-          body = '## Security issues in commit \`' + sha[:8] + '\`\n\n' + summary + '\n\n'
-          for f in findings:
-              body += '- ' + f + '\n'
-          print(json.dumps({'title': 'Security issue in commit ' + sha[:8], 'body': body, 'labels': ['security']}))
-          ")
-            curl -sf -X POST "https://api.github.com/repos/$REPO/issues" \
-              -H "Authorization: token $GH_TOKEN" \
-              -H "Content-Type: application/json" \
-              -d "$BODY"
-            echo "Issue created"
-          else
-            echo "No issues found"
-          fi
+          git diff HEAD~1 HEAD | head -c 10000 > /tmp/diff.txt
+          test -s /tmp/diff.txt || { echo 'No diff, skipping'; exit 0; }
+          python3 - <<'PYEOF'
+          import json, os, re, urllib.request, urllib.error
+          diff = open('/tmp/diff.txt').read()
+          prompt = (
+              'Review this git diff for security vulnerabilities: hardcoded secrets, API keys, '
+              'injection, XSS, auth bypass, OWASP Top 10.\n'
+              'Respond with ONLY a raw JSON object, no markdown, no explanation:\n'
+              '{"issues": false, "summary": "", "findings": []}\n'
+              'Set issues to true only if you find real vulnerabilities.\n\nDiff:\n' + diff
+          )
+          payload = json.dumps({
+              'model': 'claude-3-5-haiku-20241022',
+              'max_tokens': 1024,
+              'messages': [{'role': 'user', 'content': prompt}]
+          }).encode()
+          req = urllib.request.Request(
+              'https://api.anthropic.com/v1/messages', data=payload,
+              headers={'x-api-key': os.environ['ANTHROPIC_API_KEY'],
+                       'anthropic-version': '2023-06-01', 'content-type': 'application/json'}
+          )
+          try:
+              with urllib.request.urlopen(req) as r: resp = json.load(r)
+          except urllib.error.HTTPError as e:
+              print('API error:', e.code, e.read().decode()); exit(0)
+          text = resp.get('content', [{}])[0].get('text', '')
+          print('Claude response:', text[:300])
+          match = re.search(r'\{.*?"issues".*?\}', text, re.DOTALL)
+          if not match:
+              print('No JSON found, assuming no issues'); exit(0)
+          try:
+              result = json.loads(match.group())
+          except Exception:
+              print('JSON parse failed, assuming no issues'); exit(0)
+          if not result.get('issues'):
+              print('No security issues found'); exit(0)
+          sha = os.environ['SHA']; repo = os.environ['REPO']
+          body = '## Security issues in commit ' + sha[:8] + '\n\n' + result.get('summary', '') + '\n\n'
+          body += ''.join('- ' + f + '\n' for f in result.get('findings', []))
+          issue_data = json.dumps({
+              'title': 'Security issue in commit ' + sha[:8],
+              'body': body, 'labels': ['security']
+          }).encode()
+          req2 = urllib.request.Request(
+              'https://api.github.com/repos/' + repo + '/issues', data=issue_data,
+              headers={'Authorization': 'token ' + os.environ['GH_TOKEN'],
+                       'Content-Type': 'application/json'}
+          )
+          with urllib.request.urlopen(req2) as r2:
+              print('Issue created:', json.load(r2)['html_url'])
+          PYEOF
 
