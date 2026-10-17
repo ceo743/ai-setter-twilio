@@ -10,6 +10,7 @@ Everything runs on a single port.
 
 import asyncio
 import base64
+import hmac
 import json
 import logging
 import os
@@ -28,6 +29,7 @@ from flask_sock import Sock
 from twilio.rest import Client as TwilioClient
 from twilio.twiml.voice_response import Connect, VoiceResponse
 
+from sofia_prompt import CAMPAGNA_WEBINAR, build_sofia_prompt
 from knowledge_base import get_knowledge_prompt, check_lead_prefilter, _format_time_spoken, _format_date_spoken, _extract_time_from_iso
 from setter_prompt import get_setter_prompt
 from analytics import analytics_bp
@@ -80,7 +82,15 @@ for _key_name in ["GROQ_API_KEY"]:
         print("  {} = {}...".format(_key_name, _val[:15]))
 
 # OpenAI Realtime API
-OPENAI_REALTIME_URL = "wss://api.openai.com/v1/realtime?model=gpt-4o-realtime-preview-2025-06-03"
+# Modello Realtime scelto da variabile d'ambiente, per provare il modello nuovo senza toccare il codice.
+REALTIME_MODEL = os.getenv("REALTIME_MODEL", "gpt-4o-realtime-preview-2025-06-03")
+OPENAI_REALTIME_URL = "wss://api.openai.com/v1/realtime?model={}".format(REALTIME_MODEL)
+REALTIME_VOICE = os.getenv("REALTIME_VOICE", "marin")
+
+# Chiave per i percorsi che fanno partire chiamate o mostrano trascrizioni. Senza chiave impostata quei percorsi
+# restano chiusi: prima chiunque conoscesse l'indirizzo poteva chiamare a nostre spese e leggere le trascrizioni.
+CENTRALINO_API_KEY = os.getenv("CENTRALINO_API_KEY", "")
+PERCORSI_PROTETTI = ("/make-call", "/transcript/", "/dashboard", "/analytics", "/api/analytics", "/test-response")
 
 # ---------------------------------------------------------------------------
 # Logging
@@ -113,8 +123,8 @@ def save_transcript(entry, transcript_text):
         "timestamp": entry.get("timestamp", ""),
         "transcript": transcript_text,
     }
-    url = "{}/transcript/{}".format(PUBLIC_URL, tid)
-    logger.info("Transcript saved: %s", url)
+    url = "{}/transcript/{}?key={}".format(PUBLIC_URL, tid, CENTRALINO_API_KEY)
+    logger.info("Transcript saved: %s/transcript/%s", PUBLIC_URL, tid)
     return url
 
 
@@ -179,6 +189,17 @@ def scrape_website(url: str) -> str:
 app = Flask(__name__)
 app.register_blueprint(analytics_bp)
 sock = Sock(app)
+
+
+@app.before_request
+def richiedi_chiave():
+    """Chiude con CENTRALINO_API_KEY i percorsi che chiamano o mostrano dati dei lead (header X-Api-Key o ?key=)."""
+    if not request.path.startswith(PERCORSI_PROTETTI):
+        return None
+    chiave = request.headers.get("X-Api-Key") or request.args.get("key") or ""
+    if not CENTRALINO_API_KEY or not hmac.compare_digest(chiave, CENTRALINO_API_KEY):
+        return jsonify({"status": "error", "detail": "chiave mancante o errata"}), 401
+    return None
 
 
 @app.route("/incoming-call", methods=["POST"])
@@ -484,6 +505,13 @@ def make_call():
     """Initiate an outbound call with lead data from Calendly form."""
     data = request.json if request.is_json else {}
     to_number = data.get("to", MY_PHONE_NUMBER)
+    campagna = data.get("campagna", "")
+
+    # SofIA chiama gli iscritti ai webinar solo con il consenso alle chiamate AI (art. 130 Codice privacy).
+    if campagna == CAMPAGNA_WEBINAR and data.get("consenso_ai") is not True:
+        return {"status": "error", "detail": "manca il consenso alle chiamate AI"}, 403
+    if campagna == CAMPAGNA_WEBINAR and (to_number in opted_out_numbers or _is_opted_out(to_number)):
+        return {"status": "error", "detail": "numero nella lista STOP"}, 403
 
     # If number was in STOP list but re-filled the form, reactivate them
     if to_number in opted_out_numbers or _is_opted_out(to_number):
@@ -506,6 +534,10 @@ def make_call():
         "budget": data.get("budget", ""),
         "data_consulenza": data.get("data_consulenza", ""),
         "ora_consulenza": data.get("ora_consulenza", ""),
+        "campagna": campagna,
+        "webinar_data": data.get("webinar_data", ""),
+        "webinar_ora": data.get("webinar_ora", ""),
+        "dopo_webinar": bool(data.get("dopo_webinar")),
     }
 
     # Scrape website before calling to gather business intelligence
@@ -992,7 +1024,7 @@ def dashboard():
 </style>
 </head><body>
 <h1>Stefania AI Setter</h1>
-<p class="subtitle">DC Academy - Dashboard Chiamate <a href="/dashboard" class="refresh">Aggiorna</a></p>
+<p class="subtitle">DC Academy - Dashboard Chiamate <a href="" class="refresh">Aggiorna</a></p>
 
 <div class="stats">
     <div class="stat"><div class="stat-number blue">{total}</div><div class="stat-label">Totale chiamate</div></div>
@@ -1481,7 +1513,10 @@ def handle_media_stream(ws):
                             break
 
                 # Build compact prompt
-                system_prompt, first_name = build_realtime_prompt(lead_data)
+                if lead_data.get("campagna") == CAMPAGNA_WEBINAR:
+                    system_prompt, first_name = build_sofia_prompt(lead_data)
+                else:
+                    system_prompt, first_name = build_realtime_prompt(lead_data)
 
                 logger.info("Lead: %s %s - ruolo: %s - budget: %s",
                             lead_data.get("nome", ""), lead_data.get("cognome", ""),
@@ -1493,7 +1528,7 @@ def handle_media_stream(ws):
                     "session": {
                         "modalities": ["text", "audio"],
                         "instructions": system_prompt,
-                        "voice": "marin",
+                        "voice": REALTIME_VOICE,
                         "input_audio_format": "g711_ulaw",
                         "output_audio_format": "g711_ulaw",
                         "input_audio_noise_reduction": {"type": "near_field"},
