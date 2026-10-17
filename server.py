@@ -90,7 +90,7 @@ REALTIME_VOICE = os.getenv("REALTIME_VOICE", "marin")
 # Chiave per i percorsi che fanno partire chiamate o mostrano trascrizioni. Senza chiave impostata quei percorsi
 # restano chiusi: prima chiunque conoscesse l'indirizzo poteva chiamare a nostre spese e leggere le trascrizioni.
 CENTRALINO_API_KEY = os.getenv("CENTRALINO_API_KEY", "")
-PERCORSI_PROTETTI = ("/make-call", "/transcript/", "/dashboard", "/analytics", "/api/analytics", "/test-response")
+PERCORSI_PROTETTI = ("/make-call", "/dashboard", "/analytics", "/api/analytics", "/test-response")
 
 # ---------------------------------------------------------------------------
 # Logging
@@ -109,7 +109,8 @@ transcripts_store = {}
 
 def save_transcript(entry, transcript_text):
     """Save transcript and return its public URL."""
-    tid = uuid.uuid4().hex[:10]
+    # Codice lungo e casuale: il link della singola trascrizione non porta la chiave del centralino.
+    tid = uuid.uuid4().hex
     esito_map = {"qualificato": "Confermato", "non in target": "Non Confermato", "da confermare": "Da Confermare"}
     esito = esito_map.get(entry["status"], "Da Confermare")
     transcripts_store[tid] = {
@@ -123,7 +124,7 @@ def save_transcript(entry, transcript_text):
         "timestamp": entry.get("timestamp", ""),
         "transcript": transcript_text,
     }
-    url = "{}/transcript/{}?key={}".format(PUBLIC_URL, tid, CENTRALINO_API_KEY)
+    url = "{}/transcript/{}".format(PUBLIC_URL, tid)
     logger.info("Transcript saved: %s/transcript/%s", PUBLIC_URL, tid)
     return url
 
