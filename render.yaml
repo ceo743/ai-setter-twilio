@@ -1,0 +1,32 @@
+# SofIA, servizio Render separato da Stefania (ai-setter-twilio). Non riusa nulla del servizio di Stefania:
+# le chiavi si inseriscono a mano alla creazione (sync: false).
+services:
+  - type: web
+    name: sofia-centralino
+    runtime: docker
+    plan: starter
+    region: frankfurt
+    branch: sofia-commercialisti
+    autoDeploy: false
+    healthCheckPath: /health
+    envVars:
+      - key: PUBLIC_URL
+        value: https://sofia-centralino.onrender.com
+      - key: CENTRALINO_API_KEY
+        generateValue: true
+      - key: REALTIME_MODEL
+        value: gpt-4o-realtime-preview-2025-06-03
+      - key: REALTIME_VOICE
+        value: marin
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: TWILIO_ACCOUNT_SID
+        sync: false
+      - key: TWILIO_AUTH_TOKEN
+        sync: false
+      - key: TWILIO_PHONE_NUMBER
+        sync: false
+      - key: UPSTASH_REDIS_REST_URL
+        sync: false
+      - key: UPSTASH_REDIS_REST_TOKEN
+        sync: false

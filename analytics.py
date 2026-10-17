@@ -346,7 +346,7 @@ function distBars(data, color, maxVal) {
 }
 
 function showTranscript(idx) {
-    fetch('/api/analytics/transcript/'+idx).then(r=>r.json()).then(d => {
+    fetch('/api/analytics/transcript/'+idx+location.search).then(r=>r.json()).then(d => {
         let t = d.transcript || 'Nessuna trascrizione';
         t = t.replace(/^(Stefania:.*)/gm, '<span class="t-stefania">$1</span>')
              .replace(/^(Lead:.*)/gm, '<span class="t-lead">$1</span>');
@@ -359,7 +359,7 @@ document.getElementById('modal').addEventListener('click', function(e) { if (e.t
 
 async function loadData() {
     document.getElementById('content').innerHTML = '<div class="loading"><div class="spinner"></div></div>';
-    const res = await fetch('/api/analytics');
+    const res = await fetch('/api/analytics'+location.search);
     DATA = await res.json();
     render(DATA);
 }
